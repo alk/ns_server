@@ -90,3 +90,15 @@ Features/Makefile:
 
 parallel_cucumber: features/Makefile
 	$(MAKE) -k -C features all_branches
+
+ln:
+	./ln-memcached
+
+clean-restart: dataclean ln ebins deps_all
+	./start_shell.sh
+
+fast-rebuild: ln ebins deps_all
+	echo done
+
+clean-rebuild: dataclean ln ebins deps_all
+	echo done
