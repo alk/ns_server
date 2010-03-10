@@ -103,6 +103,7 @@ webconfig() ->
     webconfig(ns_config:get()).
 
 loop(Req, AppRoot, DocRoot) ->
+    timer:sleep(200),
     try
         % Using raw_path so encoded slash characters like %2F are handed correctly,
         % in that we delay converting %2F's to slash characters until after we split by slashes.
