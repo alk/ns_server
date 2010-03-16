@@ -13,7 +13,9 @@ init(Parent, Addr, Timeout) ->
     [Host, Port | _] = string:tokens(Location, ":"),
     PortNum = list_to_integer(Port),
     {ok, Sock} = gen_tcp:connect(Host, PortNum,
-                                 [binary, {packet, 0}, {active, false}]),
+                                 [binary, {packet, 0}, {active, false}
+                                  , {nodelay, true}
+]),
     proc_lib:init_ack(Parent, {ok, self()}),
     worker(Addr, Sock, Timeout).
 
