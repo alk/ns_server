@@ -651,6 +651,7 @@ var StatGraphs = {
                     + "listen_disabled_num decr_hits cmd_flush engine_maxbytes bytes incr_misses "
                     + "cmd_set decr_misses accepting_conns cas_hits limit_maxbytes cmd_get "
                     + "connection_structures cas_badval auth_cmds evictions").split(' '),
+  temporaryHiddenStats: {},
   visibleStats: [],
   visibleStatsIsDirty: true,
   statNames: {},
@@ -710,11 +711,21 @@ var StatGraphs = {
       $('.stats_visible_period').text(Math.ceil(stats[selected].length * stats['samplesInterval'] / 1000));
     }
 
-
     _.each(self.visibleStats, function (statName) {
-      var ops = stats[statName] || [];
       var area = self.findGraphArea(statName);
-      renderSmallGraph(area, ops, selected == statName);
+      var ops = stats[statName] || [];
+      if (ops.length == 0) {
+        if (!self.temporaryHiddenStats[statName]) {
+          area.hide();
+          self.temporaryHiddenStats[statName] = true;
+        }
+      } else {
+        if (self.temporaryHiddenStats[statName]) {
+          area.show();
+          self.temporaryHiddenStats[statName] = false;
+        }
+        renderSmallGraph(area, ops, selected == statName);
+      }
     });
 
     cell.setRecalculateTime();
@@ -767,7 +778,6 @@ var StatGraphs = {
     var t;
     _.each(self.recognizedStats, function (statName) {
       var area = self.findGraphArea(statName);
-      area.hide();
       if (!t)
         t = area;
       else
