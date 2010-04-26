@@ -181,6 +181,8 @@ class ClusterConfig
 
     # we need some extra time to settle some things (free memory at least)
     sleep 5
+    puts "started!. Waiting"
+    STDIN.gets
   end
 
   def wait_up_ports(ports_to_wait, timeout = 10)

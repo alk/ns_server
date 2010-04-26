@@ -9,7 +9,7 @@ end
 When /^I put (\d+)M of data to default bucket$/ do |size|
   size = size.to_i
   fmt = 'a_%d'
-  c = Memcached.new("127.0.0.1:#{direct_port('A')}",
+  c = Memcached.new("127.0.0.1:#{proxy_port('A')}",
                     :binary_protocol => true,
                     :tcp_nodelay => true)
   begin
@@ -30,5 +30,5 @@ Then /^I should get (\d+)% cache utilization for ([a-zA-Z_]+) bucket$/ do |perce
   info = node_get('A', '/pools/default/buckets/default')
 
   actual_utilization = info['basicStats']['cachePercentUsed']
-  assert_in_delta  0.5, actual_utilization, 0.005
+  assert_in_delta percent.to_f*0.01, actual_utilization, 0.005
 end
