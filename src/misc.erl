@@ -417,15 +417,12 @@ remove_trailing_whitespace(X) ->
 %% Wait for a process.
 
 wait_for_process(Pid, Timeout) ->
-    Me = self(),
-    spawn(fun() ->
-                  process_flag(trap_exit, true),
-                  link(Pid),
-                  erlang:monitor(process, Me),
-                  receive _ -> Me ! finished end
-          end),
-    receive finished -> ok
-    after Timeout -> {error, timeout}
+    Ref = erlang:monitor(process, Pid),
+    receive
+        {'DOWN', Ref, _, _, _} -> ok
+    after Timeout ->
+            erlang:demonitor(Ref, [flush]),
+            {error, timeout}
     end.
 
 wait_for_process_test() ->
@@ -438,4 +435,8 @@ wait_for_process_test() ->
     %% Process that exited before we went.
     Pid = spawn(fun() -> ok end),
     ok = wait_for_process(Pid, 100),
-    ok = wait_for_process(Pid, 100).
+    ok = wait_for_process(Pid, 100),
+    receive
+        X -> exit({unexpected_message, X})
+    after 500 -> ok
+    end.
