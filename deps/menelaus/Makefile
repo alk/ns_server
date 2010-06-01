@@ -3,11 +3,10 @@
 TMP_DIR=./tmp
 TMP_VER=$(TMP_DIR)/version_num.tmp
 DIST_DIR=$(TMP_DIR)/menelaus
-SPROCKETIZE=`which sprocketize`
 
 .PHONY: ebins ebin_app version
 
-all: deps priv/public/js/all.js ebins
+all: deps ebins
 
 ebins: ebin_app
 	test -d ebin || mkdir ebin
@@ -20,14 +19,6 @@ ebin_app: version
 version:
 	test -d $(TMP_DIR) || mkdir $(TMP_DIR)
 	git describe | sed s/-/_/g > $(TMP_VER)
-
-priv/public/js/all.js: priv/js/*.js
-	mkdir -p `dirname $@`
-	$(SPROCKETIZE) -I priv/js priv/js/app.js >$@
-
-priv/public/js/t-all.js: priv/js/*.js
-	mkdir -p `dirname $@`
-	$(SPROCKETIZE) -I priv/js priv/js/app.js priv/js/hooks.js >$@
 
 deps:
 	test -d deps/mochiweb/ebin || mkdir deps/mochiweb/ebin
