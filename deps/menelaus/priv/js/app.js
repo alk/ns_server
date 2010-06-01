@@ -705,7 +705,7 @@ var StatGraphs = {
   findGraphArea: function (statName) {
     return $('#analytics_graph_' + statName)
   },
-  renderNothing: function () {
+  renderNothingForLargeGraph: function () {
     var self = this;
     if (self.spinners.length)
       return;
@@ -713,6 +713,13 @@ var StatGraphs = {
     var main = $('#analytics_main_graph')
     self.spinners.push(overlayWithSpinner(main));
     main.find('.marker').remove();
+  },
+  renderNothing: function () {
+    var self = this;
+    if (self.spinners.length)
+      return;
+
+    self.renderNothingForLargeGraph();
 
     _.each(self.visibleStats, function (statName) {
       var area = self.findGraphArea(statName);
@@ -755,11 +762,14 @@ var StatGraphs = {
     }
 
     var selected = self.selected.value;
+    if (!_.include(self.visibleStats, selected))
+      selected = undefined;
     if (stats[selected]) {
       renderLargeGraph(main, stats[selected]);
       $('.stats_visible_period').text(Math.ceil(stats[selected].length * stats['samplesInterval'] / 1000));
+    } else {
+      this.renderNothingForLargeGraph();
     }
-
 
     _.each(self.visibleStats, function (statName) {
       var ops = stats[statName] || [];
