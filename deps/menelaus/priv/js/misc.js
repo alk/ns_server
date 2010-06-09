@@ -59,7 +59,7 @@ function escapeJS(string) {
 
 function renderJSLink(functionName, arg, prefix) {
   prefix = prefix || "javascript:"
-  return escapeHTML(prefix + functionName + "('" + escapeJS(arg) + "')")
+  return escapeHTML(prefix + functionName + "('" + escapeJS(encodeURIComponent(arg)) + "')")
 }
 
 _.template = function (str, data) {

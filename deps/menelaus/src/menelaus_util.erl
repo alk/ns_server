@@ -221,7 +221,17 @@ parse_boolean(Value) ->
     end.
 
 concat_url_path(Segments) ->
-    "/" ++ string:join(lists:map(fun mochiweb_util:quote_plus/1, Segments), "/").
+    "/" ++ string:join(lists:map(fun (Seg) ->
+                                         case mochiweb_util:quote_plus(Seg) of
+                                             %% unfortunately "." path
+                                             %% segments are
+                                             %% interpreted specially
+                                             %% in browsers
+                                             "." -> "%2E";
+                                             ".." -> "%2E%2E";
+                                             X -> X
+                                         end
+                                 end, Segments), "/").
 
 %% does a simple email address validation
 validate_email_address(Address) ->
