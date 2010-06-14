@@ -112,6 +112,7 @@ handle_call({set_ip_address, IPAddress}, _, State) ->
                                          (X) -> X
                                      end, make_ref()),
                     ns_config:set(nodes_wanted, [node()]),
+                    timer:apply_after(1000, ns_cluster, leave_sync, []),
                     {reply, ok, State#state{have_address=true}}
             end
     end;
