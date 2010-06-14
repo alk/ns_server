@@ -27,6 +27,10 @@ init([]) ->
             {ns_config, start_link, [CfgPath, ns_config_default]},
             permanent, 10, worker, [ns_config, ns_config_default]},
 
+           % address_manager for ip/otp-name configuration
+           {address_manager, {address_manager, start_link, [CfgPath]},
+            permanent, 10, worker, [address_manager]},
+
            %% % Track bucket configs and ensure isasl is sync'd up
            %% {ns_config_isasl_sync,
            %%  {ns_config_isasl_sync, start_link, []},
