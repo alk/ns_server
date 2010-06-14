@@ -2810,6 +2810,12 @@ var NodeDialog = {
       }
     }
   },
+  submit_resources: function () {
+    var value = $('#resource_panel_ip_address').val();
+    postWithValidationErrors("/nodes/Self/controller/settings", "ipAddress=" + encodeURIComponent(value), 
+                             function () {}, {async: false});
+    showInitDialog("cluster");
+  },
   startPage_secure: function(node, pagePrefix, opt) {
     var parentName = '#' + pagePrefix + '_dialog';
 

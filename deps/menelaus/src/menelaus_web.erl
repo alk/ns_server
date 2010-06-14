@@ -1090,7 +1090,8 @@ handle_node(_PoolId, Node, Req) ->
                end,
     R = {struct, storage_conf_to_json(ns_storage_conf:storage_conf(Node))},
     reply_json(Req,
-               {struct, [{"license", list_to_binary(License)},
+               {struct, [{"ipAddressGuess", list_to_binary(address_manager:guess_best_ip_address())},
+                         {"license", list_to_binary(License)},
                          {"licenseValid", Valid},
                          {"licenseValidUntil", list_to_binary(ValidUntil)},
                          {"memoryQuota", MemQuota},
@@ -1154,33 +1155,41 @@ handle_node_settings_post(Node, Req) ->
     %% parameter example: license=some_license_string, memoryQuota=NumInMb
     %%
     Params = Req:parse_post(),
-    Results = [
-        case proplists:get_value("license", Params) of
-            undefined -> ok;
-            License -> case ns_license:change_license(Node, License) of
+    Results = [case proplists:get_value("license", Params) of
+                   undefined -> ok;
+                   License -> case ns_license:change_license(Node, License) of
+                                  ok         -> ok;
+                                  {error, _} -> "Error changing license.\n"
+                              end
+               end,
+               case proplists:get_value("memoryQuota", Params) of
+                   undefined -> ok;
+                   X -> MQNum = case X of
+                                    "none" -> none;
+                                    _      -> list_to_integer(X)
+                                end,
+                        case ns_storage_conf:change_memory_quota(Node, MQNum) of
                             ok         -> ok;
-                            {error, _} -> "Error changing license.\n"
+                            {error, _} -> "Error changing memory quota.\n"
+                        end
+               end,
+               case proplists:get_value("ipAddress", Params) of
+                   undefined -> ok;
+                   X ->
+                       case address_manager:set_ip_address(X) of
+                           ok -> ok;
+                           locked -> ok;        % Assuming developer machine
+                           {error, Crap} ->
+                               iolib:format("Error changing ip address: ~p~n", [Crap])
                        end
-        end,
-        case proplists:get_value("memoryQuota", Params) of
-            undefined -> ok;
-            X -> MQNum = case X of
-                             "none" -> none;
-                             _      -> list_to_integer(X)
-                         end,
-                 case ns_storage_conf:change_memory_quota(Node, MQNum) of
-                     ok         -> ok;
-                     {error, _} -> "Error changing memory quota.\n"
-                 end
-        end
-    ],
+               end],
     case lists:filter(fun(X) -> X =/= ok end, Results) of
         [] -> Req:respond({200, add_header(), []});
         Errs -> Req:respond({400, add_header(), lists:flatten(Errs)})
     end.
 
 validate_add_node_params(Hostname, Port, User, Password) ->
-    Candidates = case lists:member(undefined, [Hostname, Port, User, Password]) of 
+    Candidates = case lists:member(undefined, [Hostname, Port, User, Password]) of
                      true -> [<<"Missing required parameter">>];
                      _ -> [is_valid_port_number(Port) orelse <<"Invalid rest port specified">>,
                            case Hostname of

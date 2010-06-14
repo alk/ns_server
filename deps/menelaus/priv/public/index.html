@@ -1993,7 +1993,7 @@
       $(function(){
         $('.config-bottom button#step-1-next').click(function (e) {
           e.preventDefault();
-          showInitDialog("cluster");
+          NodeDialog.submit_resources();
         });
       });
     </script>
@@ -2243,6 +2243,14 @@
       <table width="93%">
         <col width="90%" />
         <col width="" />
+        <tr>
+          <td colspan="2">
+            <h2><label for="resource_panel_ip_address">IP Address:</label></h2>
+          </td>
+        </tr>
+        <tr>
+          <td><input id="resource_panel_ip_address" type="text" name="ipAddress" value="{%= ipAddressGuess %}"</td>
+        </tr>
         <tr>
           <td colspan="2">
             <h2>Memory Cache</h2>
