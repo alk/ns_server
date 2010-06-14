@@ -59,29 +59,7 @@ engage_cluster(RemoteIP) ->
 %% implements it. It also checks that other node ip is indeed reachable.
 engage_cluster(RemoteIP, Options) ->
     case ns_cluster:prepare_join_to(RemoteIP) of
-        {ok, MyAddr} ->
-            MyNode = node(),
-            case ns_node_disco:nodes_wanted() of
-                [MyNode] ->
-                    %% we're alone, so adjust our name
-                    case dist_manager:adjust_my_address(MyAddr) of
-                        nothing -> ok;
-                        net_restarted ->
-                            case lists:member(restart, Options) of
-                                true ->
-                                    %% and potentially restart services
-                                    PrevInitStatus = ns_config:search_prop(ns_config:get(),
-                                                                           init_status,
-                                                                           value, ""),
-                                    ns_cluster:leave_sync(),
-                                    ns_config:set(init_status, [{value, PrevInitStatus}]),
-                                    ok;
-                                _ -> ok
-                            end
-                    end;
-                %% not alone, keep present config
-                _ -> ok
-            end;
+        {ok, _MyAddr} -> ok;
         {error, Reason} ->
             case lists:member(raw_error, Options) of
                 true -> {error, prepare_failed, Reason}; % compatible with handle_join_rest_failure
@@ -171,10 +149,9 @@ join_cluster(OtherHost, OtherPort, OtherUser, OtherPswd) ->
             ns_log:log(?MODULE, ?MISSING_OTP_NODE, "During node join, remote node (~p:~p) returned an invalid response: missing otpNode (from node ~p).",
                        [OtherHost, OtherPort, node()]),
             {error, [list_to_binary("Invalid response from remote node, missing otpNode.")]};
-        {ok, Node, Cookie, MyIP} ->
-            handle_join(list_to_atom(binary_to_list(Node)),
-                        list_to_atom(binary_to_list(Cookie)),
-                        MyIP);
+        {ok, Node, Cookie} ->
+            complete_join(list_to_atom(binary_to_list(Node)),
+                          list_to_atom(binary_to_list(Cookie)));
         {error, system_not_joinable} ->
             %% We are not an 'empty' node, so user should first remove
             %% buckets, etc.
@@ -190,12 +167,9 @@ handle_join_inner(OtherHost, OtherPort, OtherUser, OtherPswd) ->
         true ->
             case ns_cluster:prepare_join_to(OtherHost) of
                 {ok, MyIP} ->
-                    case menelaus_rest:rest_engage_cluster(OtherHost, OtherPort,
-                                                           {OtherUser, OtherPswd},
-                                                           MyIP) of
-                        {ok, Node, Cookie} -> {ok, Node, Cookie, MyIP};
-                        X -> X
-                    end;
+                    menelaus_rest:rest_engage_cluster(OtherHost, OtherPort,
+                                                      {OtherUser, OtherPswd},
+                                                      MyIP);
                 {error, Reason} ->
                     {error, prepare_failed, Reason}
             end;
@@ -203,8 +177,7 @@ handle_join_inner(OtherHost, OtherPort, OtherUser, OtherPswd) ->
             {error, system_not_joinable}
     end.
 
-handle_join(OtpNode, OtpCookie, MyIP) ->
-    dist_manager:adjust_my_address(MyIP),
+complete_join(OtpNode, OtpCookie) ->
     case ns_cluster:join(OtpNode, OtpCookie) of
         ok -> ns_log:log(?MODULE, ?JOINED_CLUSTER, "Joined cluster at node: ~p with cookie: ~p from node: ~p",
                          [OtpNode, OtpCookie, erlang:node()]),
