@@ -13,6 +13,7 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
+    io:format("ns_node_disco_sup:init~n"),
     {ok, {{rest_for_one,
            misc:get_env_default(max_r, 3),
            misc:get_env_default(max_t, 10)},

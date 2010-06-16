@@ -17,7 +17,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, set_ip_address/1]).
+-export([start_link/1, set_ip_address/1, do_restart_everything/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -42,7 +42,10 @@ set_ip_address(IPAddress) ->
 %% @end
 %%--------------------------------------------------------------------
 start_link(CfgPath) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [CfgPath], []).
+    io:format("address_manager:enter~n"),
+    RV = gen_server:start_link({local, ?SERVER}, ?MODULE, [CfgPath], []),
+    io:format("address_manager:exit~n"),
+    RV.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -74,6 +77,7 @@ init([CfgPath]) ->
                           start_network(Addr),
                           HA
                   end,
+    io:format("address_manager:init completion~n"),
     {ok, #state{ip_config_path = Path,
                 have_address = HaveAddress}}.
 
@@ -102,19 +106,24 @@ handle_call({set_ip_address, IPAddress}, _, State) ->
                 ok ->
                     ok = save_address_config(State#state.ip_config_path, IPAddress),
                     OldNode = node(),
-                    {ok, _} = start_network(IPAddress),
+                    io:format("setting ip address: ~p~n", [IPAddress]),
+                    ok = start_network(IPAddress),
                     NewNode = node(),
+                    io:format("new node name is ~p~n", [NewNode]),
                     ns_config:update(fun ({node, Node, X}) when Node =:= OldNode -> {node, NewNode, X};
                                          (X) -> X
                                      end, make_ref()),
-                    ns_config:set(nodes_wanted, [node()]),
-                    timer:apply_after(1000, ns_cluster, leave_sync, []),
+                    {ok, _} = timer:apply_after(1000, ?MODULE, do_restart_everything, []),
                     {reply, ok, State#state{have_address=true}}
             end
     end;
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
+
+do_restart_everything() ->
+    io:format("re-spawning ns_cluster!~n"),
+    ns_cluster:leave_sync().
 
 %%--------------------------------------------------------------------
 %% @private
@@ -211,7 +220,9 @@ save_address_config(Path, IPAddress) ->
 start_network(IPAddress) ->
     MyNodeName = list_to_atom("ns_1@" ++ IPAddress),
     net_kernel:stop(),
-    net_kernel:start([MyNodeName, longnames]).
+    {ok, _Pid} = net_kernel:start([MyNodeName, longnames]),
+    ns_config:set(nodes_wanted, [node()]),
+    ok.
 
 address_badness({127, _, _, _}) -> %% localhost
     3;

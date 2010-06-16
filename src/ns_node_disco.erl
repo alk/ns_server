@@ -92,6 +92,7 @@ init([]) ->
     ok = net_kernel:monitor_nodes(true),
     {ok, Timer} = timer:send_interval(?PING_FREQ, ping_all),
     % Track the last list of actual ndoes.
+    io:format("ns_node_disco:init completion~n"),
     {ok, #state{nodes = false, timer = Timer}}.
 
 terminate(_Reason, State) ->
