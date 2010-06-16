@@ -1089,8 +1089,9 @@ handle_node(_PoolId, Node, Req) ->
                    Y    -> Y
                end,
     R = {struct, storage_conf_to_json(ns_storage_conf:storage_conf(Node))},
+    {_, IPAddress} = misc:node_name_host(node()),
     reply_json(Req,
-               {struct, [{"ipAddress", list_to_binary(misc:node_name_host(node()))},
+               {struct, [{"ipAddress", list_to_binary(IPAddress)},
                          {"license", list_to_binary(License)},
                          {"licenseValid", Valid},
                          {"licenseValidUntil", list_to_binary(ValidUntil)},
