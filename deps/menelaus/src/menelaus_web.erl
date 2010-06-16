@@ -1090,7 +1090,7 @@ handle_node(_PoolId, Node, Req) ->
                end,
     R = {struct, storage_conf_to_json(ns_storage_conf:storage_conf(Node))},
     reply_json(Req,
-               {struct, [{"ipAddressGuess", list_to_binary(address_manager:guess_best_ip_address())},
+               {struct, [{"ipAddress", list_to_binary(misc:node_name_host(node()))},
                          {"license", list_to_binary(License)},
                          {"licenseValid", Valid},
                          {"licenseValidUntil", list_to_binary(ValidUntil)},

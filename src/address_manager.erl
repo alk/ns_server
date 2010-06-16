@@ -17,8 +17,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, set_ip_address/1,
-         guess_best_ip_address/0]).
+-export([start_link/1, set_ip_address/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -34,9 +33,6 @@
 
 set_ip_address(IPAddress) ->
     gen_server:call(?MODULE, {set_ip_address, IPAddress}).
-
-guess_best_ip_address() ->
-    gen_server:call(?MODULE, guess_best_ip_address).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -73,7 +69,7 @@ init([CfgPath]) ->
                                            {ok, IPAddress} ->
                                                {true, IPAddress};
                                            _ ->
-                                               {false, "nohost"}
+                                               {false, guess_best_ip_address()}
                                        end,
                           start_network(Addr),
                           HA
@@ -116,17 +112,6 @@ handle_call({set_ip_address, IPAddress}, _, State) ->
                     {reply, ok, State#state{have_address=true}}
             end
     end;
-handle_call(guess_best_ip_address, _, #state{have_address = true} = State) ->
-    {_, Host} = misc:node_name_host(node()),
-    {reply, Host, State};
-handle_call(guess_best_ip_address, _, State) ->
-    {ok, AddrInfo} = inet:getif(),
-    AddrList = lists:map(fun ({A,_,_}) -> A end, AddrInfo),
-    Addr = pick_best_address(AddrList),
-    RV = string:join(lists:map(fun erlang:integer_to_list/1,
-                               tuple_to_list(Addr)),
-                     "."),
-    {reply, RV, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -262,3 +247,11 @@ is_current_name_locked() ->
         false -> false;
         {value, X} -> X
     end.
+
+guess_best_ip_address() ->
+    {ok, AddrInfo} = inet:getif(),
+    AddrList = lists:map(fun ({A,_,_}) -> A end, AddrInfo),
+    Addr = pick_best_address(AddrList),
+    string:join(lists:map(fun erlang:integer_to_list/1,
+                          tuple_to_list(Addr)),
+                ".").

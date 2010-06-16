@@ -623,7 +623,7 @@ var MockedRequest = mkClass({
         "hostname":"127.0.0.1",
         "version":"1.0.3_98_g5d1f7a2",
         "os":"i386-apple-darwin10.3.0",
-        "ipAddressGuess": "8.34.53.212",
+        "ipAddress": "8.34.53.212",
         "ports":{"proxy":11211,"direct":11210}}],
       [post("nodes", x, "controller", "settings"), {}], //missing
 
