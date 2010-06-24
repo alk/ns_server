@@ -496,17 +496,51 @@ pool_proxy_port(_PoolConfig, _Node) ->
 handle_pool_info_streaming(Id, Req) ->
     UserPassword = menelaus_auth:extract_auth(Req),
     LocalAddr = menelaus_util:local_addr(Req),
-    F = fun(InfoLevel) -> build_pool_info(Id, UserPassword, InfoLevel, LocalAddr) end,
-    handle_streaming(F, Req, undefined).
+    case proplists:get_value("streamingCallback", Req:parse_qs()) of
+        undefined ->
+            F = fun(InfoLevel) -> build_pool_info(Id, UserPassword, InfoLevel, LocalAddr) end,
+            handle_streaming(F, Req, undefined);
+        Callback ->
+            F = fun() ->
+                        [Callback, "(",
+                         %% TODO: escape </script> in strings (probably not here)
+                         mochijson2:encode(build_pool_info(Id, UserPassword, normal, LocalAddr)),
+                         ")"]
+                end,
+            timer:send_interval(30000, {notify_watcher, timer}),
+            handle_iframe_streaming(F, start_streaming(Req, "text/html; charset=utf-8"))
+    end.
 
-handle_streaming(F, Req, LastRes) ->
-    HTTPRes = Req:ok({"application/json; charset=utf-8",
+handle_iframe_streaming(F, HTTPRes) ->
+    receive
+        {notify_watcher, _} -> handle_iframe_streaming(F, HTTPRes)
+    after 0 ->
+            ok
+    end,
+    Res = F(),
+    HTTPRes:write_chunk(["<script>", Res, "</script>"]),
+    timer:sleep(50),
+    receive
+        {notify_watcher, _} = X ->
+            error_logger:info_msg("woken up by:~p~n", [X]);
+        _ ->
+            error_logger:info_msg("menelaus_web streaming socket closed by client~n"),
+            exit(normal)
+    end,
+    handle_iframe_streaming(F, HTTPRes).
+
+start_streaming(Req, ContentType) ->
+    HTTPRes = Req:ok({ContentType,
                       server_header(),
                       chunked}),
     %% Register to get config state change messages.
     menelaus_event:register_watcher(self()),
     Sock = Req:get(socket),
     inet:setopts(Sock, [{active, true}]),
+    HTTPRes.
+
+handle_streaming(F, Req, LastRes) ->
+    HTTPRes = start_streaming(Req, "application/json; charset=utf-8"),
     handle_streaming(F, Req, HTTPRes, LastRes).
 
 handle_streaming(F, Req, HTTPRes, LastRes) ->
