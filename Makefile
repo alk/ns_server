@@ -102,3 +102,18 @@ fast-rebuild: ln all
 
 clean-rebuild: dataclean ln ebins deps_all
 	echo done
+
+lxc-run: fast-rebuild
+	cloning-networking make do-lxc-run-tail
+
+LXC_COUNT=3
+
+lxc-cluster: fast-rebuild
+	gnome-terminal --disable-factory --profile=remote --active $(foreach i,$(shell ruby -e 'print (1..$(LXC_COUNT)).to_a.join(" ")'), $(if $(subst 1,,$(i)), --tab) -e "sh -c 'cloning-networking make do-lxc-run-tail && read nothing && true'")
+
+do-lxc-run-tail: dataclean
+	epmd &
+	rm -rf /var/tmp/l$(LXC_IP)
+	cp -rl . /var/tmp/l$(LXC_IP) || cp -r . /var/tmp/l$(LXC_IP)
+	((while true; do sleep 3600; done) | /home/me/src/altoros/moxi/membase-utils/port_adaptor 0 /usr/sbin/sshd -4De -o UsePrivilegeSeparation=no) &
+	(cd /var/tmp/l$(LXC_IP) && (ulimit -c unlimited; ./start_shell.sh ; echo "terminated. Enter to restart." &&  (read nothing) && ./start_shell.sh))
