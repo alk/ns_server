@@ -443,7 +443,7 @@
         <div class="side side_3"></div>
         <div class="side side_4"></div>
         <div class="pad">
-          <a class="edit_btn disabled"><!--EDIT--></a>
+          <a class="edit_btn" href="#editBucketSettings={%=h(uri)%}">EDIT</a>
           <table class="bucket_properties_table">
           <col width="50%" />
           <col width="50%" />
@@ -874,17 +874,17 @@
             <col width="" />
               <tr>
                 <td class="label"><label>Bucket Name:</label></td>
-                <td><input type="text" class="inp inp_size_2" /></td>
+                <td><input type="text" disabled class="inp inp_size_2" name="name"></td>
               </tr>
               <tr>
                 <td class="label"><label>Bucket Type:</label></td>
                 <td>
-                  <select class="inp_size_2">
+                  <select disabled class="inp_size_2">
                     <option>Membase</option>
                   </select>
                 </td>
               </tr>
-              <tr>
+              <!-- tr>
                 <td class="label"><label>Number of Servers:</label></td>
                 <td class="content_cell">
                   <div class="spac_5"></div>
@@ -892,9 +892,9 @@
                   <label><input type="radio" name="num_serv" /> Fixed</label>
                   <input type="text" value="3" /> (of 12 servers in this cluster)
                 </td>
-              </tr>
+              </tr -->
             </table>
-            <h3>Access Control</h3>
+            <!-- h3>Access Control</h3>
             <table>
             <col width="172" />
             <col width="" />
@@ -922,8 +922,8 @@
                   <label><input type="radio" name="access_bucket" /> Sourse IP Address</label>
                 </td>
               </tr>
-            </table>
-            <h3>Cache Size</h3>
+            </table -->
+            <h3>Memory Size</h3>
             <div>
               <table class="full_width">
               <col width="172" />
@@ -968,7 +968,7 @@
                 <col width="172" />
                 <col width="" />
                   <tr>
-                    <td colspan="2"><label><input type="checkbox" /> Enable Persistence</label></td>
+                    <td colspan="2"><label><input type="checkbox" checked disabled> Enable Persistence</label></td>
                   </tr>
                   <tr>
                     <td colspan="2">
@@ -976,40 +976,7 @@
                     </td>
                   </tr>
                   <tr>
-                    <td class="label">Solid State Quota:</td>
-                    <td>
-                      <div class="float_left">
-                        <input type="text" value="30" /> GB
-                      </div>
-                      <table class="RAM_diagramm float_right">
-                      <col width="">
-                      <col width="">
-                      <col width="">
-                      <col width="">
-                        <tr>
-                          <td colspan="4">
-                            <span class="diagr_ram">
-                              <span style="width: 33%;" class="blue"></span>
-                              <span style="width: 68%;" class="green"></span>
-                            </span>
-                          </td>
-                        </tr>
-                        <tr class="diagr_labels">
-                          <td class="blue">Membase Quota (15Gb)</td>
-                          <td class="green">Other (5Gb)</td>
-                          <td>Free (12Gb)</td>
-                          <td class="right">32Gb</td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td colspan="2">
-                      <span class="total_ram">Total RAM (192 Gb)</span>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td class="label">Solid State Quota:</td>
+                    <td class="label">Disk Quota:</td>
                     <td>
                       <div class="float_left">
                         <input type="text" value="30" /> GB
@@ -1045,15 +1012,15 @@
                 <col width="" />
                   <tr>
                     <td>
-                      <label><input type="checkbox" /> Enable Persistence</label>
+                      <label><input type="checkbox" checked disabled> Enable replication</label>
                     </td>
                     <td>
-                      <input type="text" /> number of replica (backup) copies:
+                      <input type="text" value="1" disabled> number of replica (backup) copies:
                     </td>
                   </tr>
                 </table>
               </div>
-              <h3>Blocking Behaviuor on Writes</h3>
+              <!-- h3>Blocking Behavior on Writes</h3>
               <div>
                 <table class="full_width">
                 <col width="172" />
@@ -1082,13 +1049,13 @@
                     </td>
                   </tr>
                 </table>
-              </div>
+              </div -->
             </div>
 
               <div class="pas_20">
               <div class="right save_cancel">
                 <button class="save_button float_right" type="submit">SAVE</button>
-                <button class="delete_button float_right">DELETE</button>
+                <!-- button class="delete_button float_right">DELETE</button -->
                 <a href="#" class="jqmClose cancel_button float_right">CANCEL</a>
               </div>
               </div>

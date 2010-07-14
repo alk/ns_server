@@ -14,6 +14,8 @@ function setFormValues(form, values) {
   form.find('input[type=text], input[type=password], input:not([type])').each(function () {
     var text = $(this);
     var name = text.attr('name');
+    if (!name)
+      return;
     var value = String(values[name] || '');
     text.val(value);
   });

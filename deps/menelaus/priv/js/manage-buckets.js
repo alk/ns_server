@@ -243,3 +243,5 @@ var BucketsSection = {
     }
   }
 };
+
+configureActionHashParam('editBucketSettings', $m(BucketsSection, 'showBucket'));
