@@ -106,7 +106,8 @@ build_bucket_info(PoolId, Id, Pool, InfoLevel, LocalAddr) ->
 handle_sasl_buckets_streaming(_PoolId, Req) ->
     LocalAddr = menelaus_util:local_addr(Req),
     F = fun (_) ->
-                SASLBuckets = lists:filter(fun ({_, BucketInfo}) ->
+                SASLBuckets = lists:filter(fun ({"default", _}) -> true;
+                                               ({_, BucketInfo}) ->
                                                    ns_bucket:auth_type(BucketInfo) =:= sasl
                                            end, ns_bucket:get_buckets()),
                 List = lists:map(fun ({Name, _BucketInfo}) ->
