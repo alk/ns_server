@@ -155,11 +155,6 @@ var BucketDetailsDialog = mkClass({
     dialog.removeClass('editing').removeClass('creating');
     dialog.addClass(isNew ? 'creating' : 'editing');
 
-    var bucketIsDefault = (initValues['name'] == 'default');
-
-    setBoolAttribute(dialog.find('[name=authType][value=none]'), 'disabled', bucketIsDefault);
-    setBoolAttribute(dialog.find('[name=saslPassword]'), 'disabled', bucketIsDefault);
-
     setBoolAttribute(dialog.find('[name=name]'), 'disabled', !isNew);
 
     setBoolAttribute(dialog.find('[name=replicaNumber]'), 'disabled', !isNew);
@@ -178,6 +173,15 @@ var BucketDetailsDialog = mkClass({
       if (errorsCell.value && errorsCell.value.summaries)
         errorsCell.setValueAttr(null, 'summaries', 'ramSummary');
     });
+
+    function nameObserver(value) {
+      var isDefault = (value == "default");
+      var pwdLabel = dialog.find('label.for-sasl-password-input');
+      pwdLabel[isDefault ? 'hide' : 'show']();
+    }
+
+    dialog.find('[name=name]').observeInput(nameObserver);
+    nameObserver(dialog.find('[name=name]').val());
 
     this.cleanups = [];
 
