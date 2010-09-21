@@ -281,7 +281,7 @@ parse_bucket_params_for_setup_default_bucket(Params, ClusterStorageTotals) ->
     RamTotals = proplists:get_value(ram, ClusterStorageTotals),
     parse_bucket_params(true,
                         "default",
-                        [{"authType", "sasl"}, {"saslPassword", ""} | Params],
+                        Params,
                         [],
                         [{ram, [{quotaUsed, 0} | RamTotals]} | ClusterStorageTotals],
                         UsageGetter).
