@@ -73,9 +73,7 @@ child_specs() ->
     RestPort = ns_config:search_node_prop(Config, rest, port),
     Command = "./bin/moxi/moxi",
     lists:foldl(
-      fun ({"default", _}, Acc) ->
-              Acc;
-          ({BucketName, BucketConfig}, Acc) ->
+      fun ({BucketName, BucketConfig}, Acc) ->
               case proplists:get_value(moxi_port, BucketConfig) of
                   undefined ->
                       Acc;
