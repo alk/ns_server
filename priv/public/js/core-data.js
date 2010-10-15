@@ -3,6 +3,7 @@ function addBasicAuth(xhr, login, password) {
   xhr.setRequestHeader('Authorization', auth);
 }
 
+// TODO: extract XHR failures diag from here
 function onUnexpectedXHRError(xhr, xhrStatus, errMsg) {
   var status;
   var self = this;
@@ -85,7 +86,6 @@ function onUnexpectedXHRError(xhr, xhrStatus, errMsg) {
 }
 
 $.ajaxSetup({
-  error: onUnexpectedXHRError,
   timeout: 30000,
   cache: false,
   beforeSend: function (xhr, options) {

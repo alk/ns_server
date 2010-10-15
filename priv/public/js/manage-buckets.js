@@ -38,7 +38,7 @@ function setupFormValidation(form, url, callback) {
     }
 
     if (status != 400 || textStatus != 'error') {
-      return; // onUnexpectedXHRError(data);
+      return;
     }
 
     console.log("plain error");
