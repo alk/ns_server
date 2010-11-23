@@ -110,10 +110,10 @@ var SamplesRestorer = mkClass({
       function wrappedBody(dataCallback) {
         function wrappedDataCallback(value, status, xhr) {
           if (value !== Cell.STANDARD_ERROR_MARK) {
-            var date = xhr.getResponseHeader('date');
             value = samplesRestorer.valueTransformer(value);
-            value.serverDate = parseHTTPDate(date).valueOf();
-            value.clientDate = (new Date()).valueOf();
+            if (value && value.op && value.op.samples.timestamp.length) {
+              value.timeOffset = (new Date()).valueOf() - value.op.samples.timestamp[value.op.samples.timestamp.length-1];
+            }
           }
           dataCallback(value);
           if (value === Cell.STANDARD_ERROR_MARK) {
@@ -338,7 +338,9 @@ var StatGraphs = {
       return self.renderNothing();
     stats = stats.samples;
 
-    var timeOffset = (cell.value.clientDate - cell.value.serverDate);
+    var timeOffset = cell.value.timeOffset;
+    if (isNaN(timeOffset))
+      timeOffset = 0;
 
     _.each(self.spinners, function (s) {
       s.remove();
