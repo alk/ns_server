@@ -34,7 +34,7 @@ var SamplesRestorer = mkClass({
     var newSamples = {};
 
     for (var keyName in samples) {
-      newSamples[keyName] = prevSamples[keyName].concat(samples[keyName].slice(1)).slice(-this.keepSamplesCount);
+      newSamples[keyName] = prevSamples[keyName].concat(samples[keyName].slice(1)).slice(-this.keepSamplesCount-1);
     }
 
     this.prevSamples = op.samples = newSamples;
