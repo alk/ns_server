@@ -438,7 +438,7 @@
                 <!-- {% $.each(rows, function () { %} -->
                 <tr>
                     <td>
-                    <a href="#visitStats={%=h(this.uri)%}">{%= h(this.name) %}</a>
+                      {% if (stale) { %}{%= h(this.name) %}{% } else { %}<a href="#visitStats={%=h(this.uri)%}">{%= h(this.name) %}</a>{% } %}
                     </td>
                     <td>{%= h(truncateTo3Digits(this.basicStats.opsPerSec)) %}</td>
                     <td>{%= h(truncateTo3Digits(this.basicStats.diskFetches)) %}</td>
@@ -488,7 +488,7 @@
                 <!-- {% $.each(rows, function () { %} -->
                 <tr>
                     <td>
-                    <a href="#visitStats={%=h(this.uri)%}">{%= h(this.name) %}</a>
+                      {% if (stale) { %}{%= h(this.name) %}{% } else { %}<a href="#visitStats={%=h(this.uri)%}">{%= h(this.name) %}</a>{% } %}
                     </td>
                     <td>{%= h(truncateTo3Digits(this.basicStats.opsPerSec)) %}</td>
                     <td>{%= h(truncateTo3Digits(this.basicStats.hitRatio * 100)) %}%</td>

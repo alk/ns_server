@@ -2,29 +2,27 @@ var MonitorBucketsSection = {
   init: function () {
     var detailedBuckets = BucketsSection.cells.detailedBuckets;
 
-    var membaseBuckets = new Cell(function (detailedBuckets) {
-      return _.select(detailedBuckets, function (bucketInfo) {
-        return bucketInfo.bucketType == 'membase';
+    function filterBucketType(type) {
+      return Cell.compute(function (v) {
+        var list = _.select(v.need(detailedBuckets), function (bucketInfo) {
+          return bucketInfo.bucketType == type;
+        });
+        var stale = v.need(IOCenter.staleness);
+        return {rows: list, stale: stale};
       });
-    }, {
-      detailedBuckets: detailedBuckets
-    });
+    }
+
+    var membaseBuckets = filterBucketType("membase");
     renderCellTemplate(membaseBuckets, 'monitor_persistent_buckets_list');
 
-    var memcachedBuckets = new Cell(function (detailedBuckets) {
-      return _.select(detailedBuckets, function (bucketInfo) {
-        return bucketInfo.bucketType != 'membase';
-      });
-    }, {
-      detailedBuckets: detailedBuckets
-    });
+    var memcachedBuckets = filterBucketType("memcached");
     renderCellTemplate(memcachedBuckets, 'monitor_cache_buckets_list');
 
-    memcachedBuckets.subscribeValue(function (list) {
-      $('#monitor_buckets .memcached-buckets-subsection')[!list || list.length ? 'show' : 'hide']();
+    memcachedBuckets.subscribeValue(function (value) {
+      $('#monitor_buckets .memcached-buckets-subsection')[!value || value.rows.length ? 'show' : 'hide']();
     });
-    membaseBuckets.subscribeValue(function (list) {
-      $('#monitor_buckets .membase-buckets-subsection')[!list || list.length ? 'show' : 'hide']();
+    membaseBuckets.subscribeValue(function (value) {
+      $('#monitor_buckets .membase-buckets-subsection')[!value || value.rows.length ? 'show' : 'hide']();
     });
 
     detailedBuckets.subscribeValue(function (list) {
