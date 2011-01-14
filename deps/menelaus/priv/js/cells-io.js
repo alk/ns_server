@@ -463,12 +463,14 @@ var IOCenter = (function () {
   };
 })();
 
+IOCenter.staleness = new Cell(function (status) {
+  return !status.healthy;
+}, {
+  status: IOCenter.status
+});
+
 ;(function () {
-  new Cell(function (status) {
-    return status.healthy;
-  }, {
-    status: IOCenter.status
-  }).subscribeValue(function (healthy) {
-    console.log("IOCenter.status.healthy: ", healthy);
+  IOCenter.staleness.subscribeValue(function (stale) {
+    console.log("IOCenter.status.healthy: ", !stale);
   });
 })();

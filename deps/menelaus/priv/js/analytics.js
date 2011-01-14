@@ -675,11 +675,7 @@ var AnalyticsSection = {
       names.text(value);
     });
 
-    var statsStaleness = (function (meta) {
-      return Cell.compute(function (v) {
-        return !!(v.need(meta).stale);
-      });
-    })(DAO.cells.stats.ensureMetaCell());
+    var statsStaleness = IOCenter.staleness;
 
     statsStaleness.subscribeValue(function (stale) {
       $('.stats-period-container')[stale ? 'hide' : 'show']();

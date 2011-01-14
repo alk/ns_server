@@ -61,7 +61,7 @@ var ServersSection = {
     if (!details)
       return;
 
-    if (rebalancing) {
+    if (rebalancing && !IO.staleness.value) {
       renderTemplate('manage_server_list', {rows:[], expandingAllowed: false}, $i('pending_server_list_container'));
       return this.renderRebalance(details);
     }
@@ -69,7 +69,7 @@ var ServersSection = {
     if (active.length) {
       renderTemplate('manage_server_list', {
         rows: active,
-        expandingAllowed: !this.serversCell.getMetaValue().stale
+        expandingAllowed: !IOCenter.staleness.value
       }, $i('active_server_list_container'));
       renderTemplate('manage_server_list', {
         rows: pending,
@@ -77,7 +77,7 @@ var ServersSection = {
       }, $i('pending_server_list_container'));
     }
 
-    if (this.serversCell.getMetaValue().stale) {
+    if (IOCenter.staleness.value) {
       $('#servers .staleness-notice').show();
       $('#servers').find('.add_button, .rebalance_button').hide();
       $('#active_server_list_container, #pending_server_list_container').find('.re_add_button, .eject_server, .failover_server, .remove_from_list').addClass('disabled');
@@ -197,7 +197,7 @@ var ServersSection = {
     });
 
     self.serversCell.subscribeAny($m(self, "refreshEverything"));
-    self.serversCell.ensureMetaCell().subscribeAny($m(self, "refreshEverything"));
+    IOCenter.staleness.subscribeAny($m(self, "refreshEverything"));
 
     prepareTemplateForCell('active_server_list', self.serversCell);
     prepareTemplateForCell('pending_server_list', self.serversCell);
@@ -475,18 +475,23 @@ var ServersSection = {
   },
   postAndReload: function (uri, data) {
     var self = this;
+    var oldDetails = self.poolDetails.value;
     // keep poolDetails undefined for now
     self.poolDetails.target.setValue(undefined);
     self.poolDetails.setValue(undefined);
     postWithValidationErrors(uri, $.param(data), function (data, status) {
       // re-calc poolDetails according to it's formula
-      self.poolDetails.invalidate();
-      if (status == 'error' && data[0].mismatch) {
-        self.poolDetails.changedSlot.subscribeOnce(function () {
+      self.poolDetails.target.changedSlot.subscribeOnce(function (cell) {
+        if (cell.value === Cell.STANDARD_ERROR_MARK) {
+          cell.setValue(oldDetails);
+          cell.invalidate();
+        }
+        if (status == 'error' && data[0].mismatch) {
           var msg = "Could not Rebalance because the cluster configuration was modified by someone else.\nYou may want to verify the latest cluster configuration and, if necessary, please retry a Rebalance."
           alert(msg);
-        });
-      }
+        }
+      });
+      self.poolDetails.invalidate();
     });
   },
   editServerSettings: function (otpNode) {

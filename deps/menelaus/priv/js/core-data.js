@@ -272,9 +272,7 @@ var DAO = {
 
   var cell = DAO.cells.serversCell = new Cell(formula, {
     details: DAO.cells.currentPoolDetailsCell,
-    detailsAreStale: (function (metaCell) {
-      return Cell.compute(function (v) {return v.need(metaCell).stale;});
-    })(DAO.cells.currentPoolDetailsCell.ensureMetaCell())
+    detailsAreStale: IOCenter.staleness
   });
   cell.propagateMeta = null;
   cell.metaCell = DAO.cells.currentPoolDetailsCell.ensureMetaCell();

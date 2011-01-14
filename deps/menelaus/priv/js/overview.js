@@ -34,10 +34,8 @@ var OverviewSection = {
       updateCount('.pending-count', pending.length);
     });
 
-    DAO.cells.currentPoolDetailsCell.ensureMetaCell().subscribeValue(function (meta) {
-      if (!meta || meta.stale === undefined)
-        return;
-      $('#overview .staleness-notice')[meta.stale ? 'show' : 'hide']();
+    IOCenter.staleness.subscribeValue(function (stale) {
+      $('#overview .staleness-notice')[stale ? 'show' : 'hide']();
     });
 
     DAO.cells.currentPoolDetailsCell.subscribeValue(function (poolDetails) {

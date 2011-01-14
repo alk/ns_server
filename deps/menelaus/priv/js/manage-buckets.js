@@ -558,9 +558,7 @@ var BucketsSection = {
       listCell: cells.detailedBuckets
     });
 
-    var stalenessCell = Cell.compute(function (v) {
-      return v.need(cells.detailedBuckets.ensureMetaCell()).stale;
-    });
+    var stalenessCell = IOCenter.staleness;
 
     renderCellTemplate(cells.detailedBuckets, 'bucket_list', {
       beforeRendering: function () {

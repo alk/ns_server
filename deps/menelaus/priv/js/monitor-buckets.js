@@ -32,7 +32,7 @@ var MonitorBucketsSection = {
       $('#monitor_buckets .no-buckets-subsection')[empty ? 'show' : 'hide']();
     });
 
-    var stalenessCell = Cell.compute(function (v) {return v.need(detailedBuckets.ensureMetaCell()).stale});
+    var stalenessCell = IOCenter.staleness;
 
     stalenessCell.subscribeValue(function (stale) {
       if (stale === undefined)
