@@ -198,6 +198,7 @@ function renderSmallGraph(jq, ops, statName, isSelected, zoomMillis, timeOffset,
                       min: now - zoomMillis,
                       max: now},
               yaxis: yaxis,
+              reuse: true,
               grid: {show:false}});
 }
 

@@ -183,6 +183,14 @@
         draw();
         bindEvents();
 
+      return function (data_) {
+        constructCanvas();
+        setData(data_);
+//        setupGrid();
+        draw();
+//        bindEvents();
+      }
+
 
         function executeHooks(hook, args) {
             args = [plot].concat(args);

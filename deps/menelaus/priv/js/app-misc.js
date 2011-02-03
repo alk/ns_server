@@ -1020,16 +1020,28 @@ function plotStatGraph(graphJQ, stats, attr, options) {
     plotOptions = options.processPlotOptions(plotOptions, plotSeries);
   }
 
-  $.plotSafe(graphJQ,
-             _.map(plotSeries, function (plotData) {
-               return {color: options.color,
-                       data: plotData};
-             }),
-             plotOptions);
+  return $.plotSafe(graphJQ,
+                    _.map(plotSeries, function (plotData) {
+                      return {color: options.color,
+                              data: plotData};
+                    }),
+                    plotOptions);
 }
 
-$.plotSafe = function (placeholder/*, rest...*/) {
+$.plotSafe = function (placeholder, data, options) {
   if (placeholder.width() == 0 || placeholder.height() == 0)
     return;
-  return $.plot.apply($, arguments);
+  var reuse = options.reuse;
+  if (reuse) {
+    var plotter = placeholder.data('plotter');
+    if (plotter) {
+      plotter.call(plotter, data);
+      return plotter;
+    }
+  }
+  plotter = $.plot.apply($, arguments);
+  if (reuse) {
+    placeholder.data('plotter', plotter);
+  }
+  return plotter;
 }
