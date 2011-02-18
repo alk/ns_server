@@ -396,6 +396,15 @@ grab_op_stats_body(Bucket, ClientTStamp, Ref, PeriodParams) ->
             end
     end.
 
+zip_stats2(Dict, StatNameA, StatNameB, Combiner) ->
+    ResA = orddict:find(StatNameA, Dict),
+    ResB = orddict:find(StatNameB, Dict),
+    case {ResA, ResB} of
+        {{ok, ValA}, {ok, ValB}} ->
+            lists:zipwith(Combiner, ValA, ValB);
+        _ -> undefined
+    end.
+
 %% converts list of samples to proplist of stat values
 -spec samples_to_proplists([#stat_entry{}]) -> [{atom(), [null | number()]}].
 samples_to_proplists([]) -> [{timestamp, []}];
@@ -423,13 +432,7 @@ samples_to_proplists(Samples) ->
                                  (Gets, Hits) -> Hits * 100/Gets
                              end, CmdGets, orddict:fetch(get_hits, Dict)),
     Z2 = fun (StatNameA, StatNameB, Combiner) ->
-                 ResA = orddict:find(StatNameA, Dict),
-                 ResB = orddict:find(StatNameB, Dict),
-                 case {ResA, ResB} of
-                     {{ok, ValA}, {ok, ValB}} ->
-                         lists:zipwith(Combiner, ValA, ValB);
-                     _ -> undefined
-                 end
+                 zip_stats2(Dict, StatNameA, StatNameB, Combiner)
          end,
     EPCacheHitRatio = lists:zipwith(fun (BGFetches, Gets) ->
                                             try (Gets - BGFetches) * 100 / Gets
