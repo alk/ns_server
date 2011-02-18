@@ -468,7 +468,7 @@ var StatGraphs = {
               {desc: "ops per second", name: "ops"},
               {desc: "direct per second", name: "direct_ops"},
               {desc: "moxi per second", name: "proxy_cmd_count"},
-              {desc: "average object size", name: "avg_item_size", missing: true}, // need total size _including_ size on disk
+              {desc: "average object size", name: "avg_item_size"}, // this is average size of key + value of resident pairs 
               // Read
               {desc: "cache hit %", name: "ep_cache_hit_rate"}, //?
               {desc: "hit latency", name: "hit_latency", missing: true}, //?

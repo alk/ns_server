@@ -405,6 +405,16 @@ zip_stats2(Dict, StatNameA, StatNameB, Combiner) ->
         _ -> undefined
     end.
 
+zip_stats3(Dict, StatNameA, StatNameB, StatNameC, Combiner) ->
+    ResA = orddict:find(StatNameA, Dict),
+    ResB = orddict:find(StatNameB, Dict),
+    ResC = orddict:find(StatNameC, Dict),
+    case {ResA, ResB, ResC} of
+        {{ok, ValA}, {ok, ValB}, {ok, ValC}} ->
+            lists:zipwith3(Combiner, ValA, ValB, ValC);
+        _ -> undefined
+    end.
+
 %% converts list of samples to proplist of stat values
 -spec samples_to_proplists([#stat_entry{}]) -> [{atom(), [null | number()]}].
 samples_to_proplists([]) -> [{timestamp, []}];
@@ -434,6 +444,10 @@ samples_to_proplists(Samples) ->
     Z2 = fun (StatNameA, StatNameB, Combiner) ->
                  zip_stats2(Dict, StatNameA, StatNameB, Combiner)
          end,
+    Z3 = fun (StatNameA, StatNameB, StatNameC, Combiner) ->
+                 zip_stats3(Dict, StatNameA, StatNameB, StatNameC, Combiner)
+         end,
+
     EPCacheHitRatio = lists:zipwith(fun (BGFetches, Gets) ->
                                             try (Gets - BGFetches) * 100 / Gets
                                             catch error:badarith -> 0
@@ -508,6 +522,12 @@ samples_to_proplists(Samples) ->
                                          catch error:badarith -> 0
                                          end
                                  end),
+    AvgItemSize = Z3(curr_items_tot, ep_num_non_resident, ep_kv_size,
+                     fun (CurrItemsTot, NonResident, KVSize) ->
+                             try (CurrItemsTot - NonResident) / KVSize
+                             catch error:badarith -> 0
+                             end
+                     end),
     ExtraStats = [{hit_ratio, HitRatio},
                   {ep_cache_hit_rate, EPCacheHitRatio},
                   {ep_resident_items_rate, ResidentItemsRatio},
@@ -521,7 +541,8 @@ samples_to_proplists(Samples) ->
                   {proxy_local_ratio, LocalRatio},
                   {proxy_local_latency, ProxyLocalLatencyMillis},
                   {proxy_ratio, ProxyRatio},
-                  {proxy_latency, ProxyTotalLatencyMillis}],
+                  {proxy_latency, ProxyTotalLatencyMillis},
+                  {avg_item_size, AvgItemSize}],
 
     lists:filter(fun ({_, undefined}) -> false;
                      ({_, _}) -> true
