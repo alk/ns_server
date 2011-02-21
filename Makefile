@@ -91,6 +91,15 @@ Features/Makefile:
 parallel_cucumber: features/Makefile
 	$(MAKE) -k -C features all_branches
 
+dataclean:
+	rm -rf $(TMP_DIR)
+	rm -rf Mnesia*
+	rm -rf config
+	rm -rf data
+	rm -rf logs
+	rm -rf coverage
+	rm -f priv/ip
+
 ln:
 	./ln-memcached
 
@@ -115,5 +124,6 @@ do-lxc-run-tail: dataclean
 	epmd &
 	rm -rf /var/tmp/l$(LXC_IP)
 	cp -rl . /var/tmp/l$(LXC_IP) || cp -r . /var/tmp/l$(LXC_IP)
+	mkdir -p /var/tmp/l$(LXC_IP)/tmp
 	((while true; do sleep 3600; done) | /home/me/src/altoros/moxi/membase-utils/port_adaptor 0 /usr/sbin/sshd -4De -o UsePrivilegeSeparation=no) &
 	(cd /var/tmp/l$(LXC_IP) && (ulimit -c unlimited; ./start_shell.sh ; echo "terminated. Enter to restart." &&  (read nothing) && ./start_shell.sh))
