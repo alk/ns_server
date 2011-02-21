@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -xe
+
+cd `dirname $0`
+
+mkdir -p bin/{bucket_engine,moxi,ep_engine} lib/memcached
+ln -sf `realpath ../built`/{default_engine.so,stdin_term_handler.so} lib/memcached/
+ln -sf `realpath ../built`/bucket_engine.so bin/bucket_engine/
+ln -sf `realpath ../built`/ep.so bin/ep_engine/
+ln -sf `realpath ../memcached-root` bin/memcached
+ln -sf `realpath ../moxi-root` bin/moxi/moxi
+#ln -sf `realpath ../built/vbucketmigrator` priv/
+#ln -sf `realpath ../built/port_adaptor` priv/
+
+ln -sf `realpath /home/me/couch` lib/couchdb
+ln -sf `realpath ../built`/sigar_port bin/
