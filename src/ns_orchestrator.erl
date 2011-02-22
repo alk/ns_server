@@ -58,7 +58,7 @@
          terminate/3]).
 
 %% States
--export([idle/2, idle/3,
+-export([idle/2, idle/3, paused/2, paused/3,
          janitor_running/2, janitor_running/3,
          rebalancing/2, rebalancing/3]).
 
@@ -180,6 +180,11 @@ handle_info({'EXIT', Pid, Reason}, janitor_running,
             self() ! janitor
     end,
     {next_state, idle, #idle_state{remaining_buckets = Buckets}};
+handle_info(pause, idle, State) ->
+    ?log_info("PAUSED !!!~n", []),
+    {next_state, paused, State};
+handle_info(unpause, paused, State) ->
+    {next_state, idle, State};
 handle_info({'EXIT', Pid, Reason}, rebalancing,
             #rebalancing_state{rebalancer=Pid}) ->
     Status = case Reason of
@@ -255,6 +260,16 @@ idle({start_rebalance, KeepNodes, EjectNodes, FailedNodes}, _From,
 idle(stop_rebalance, _From, State) ->
     {reply, not_rebalancing, idle, State}.
 
+paused(_, _) ->
+     exit(unhandled).
+
+paused(Msg, From, State) ->
+    case Msg of
+        {stop_rebalance, _, _, _} -> exit(paused);
+        _ -> ok
+    end,
+    {reply, Rep, idle, NewState} = idle(Msg, From, State),
+    {reply, Rep, paused, NewState}.
 
 janitor_running(rebalance_progress, _From, State) ->
     {reply, not_running, janitor_running, State};

@@ -163,6 +163,7 @@ do_sanify_chain(Bucket, States, Chain, VBucket, Zombies) ->
                               [VBucket, Bucket, Node]),
                             [Node];
                         Pos ->
+                            ?log_info("master is ~p replica node ~p is active for vbucket ~p. Making it master~n", [State, Node, VBucket]),
                             [Node|lists:nthtail(Pos, Chain)]
                     end;
                 Nodes ->

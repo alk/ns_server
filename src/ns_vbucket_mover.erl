@@ -64,6 +64,7 @@ code_change(_OldVsn, _Extra, State) ->
 
 
 init({Bucket, Moves, ProgressCallback}) ->
+    ?log_info("Moving vbuckets for ~p:~n~p~n", [Bucket, Moves]),
     %% Dictionary mapping old node to vbucket and new node
     MoveDict = lists:foldl(fun ({_, undefined, _}, D) -> D;
                                ({V, O, N}, D) ->
@@ -206,6 +207,7 @@ run_mover(Bucket, V, N1, N2, Tries) ->
             wait_for_mover(Bucket, V, N1, N2, Tries);
         {{ok, dead}, {ok, pending}} ->
             ok = ns_memcached:set_vbucket(N1, Bucket, V, active),
+            ?log_info("Bucket master state is dead: ~p, ~p, ~p~n", [N1, Bucket, V]),
             ok = ns_memcached:set_vbucket(N2, Bucket, V, dead),
             ok = ns_memcached:delete_vbucket(N2, Bucket, V),
             ok = ns_memcached:set_vbucket(N2, Bucket, V, pending),

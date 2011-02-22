@@ -38,6 +38,8 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-include("ns_common.hrl").
+
 -define(DEFAULT_TIMEOUT, 500).
 -define(TERMINATE_SAVE_TIMEOUT, 10000).
 
@@ -597,6 +599,7 @@ announce_changes([]) -> ok;
 announce_changes(KVList) ->
     % Fire a event per changed key.
     lists:foreach(fun ({Key, Value}) ->
+                          ?log_info("config realtime: ~p ->~n~p~n", [Key, Value]),
                           gen_event:notify(ns_config_events,
                                            {Key, strip_metadata(Value)})
                   end,

@@ -56,6 +56,7 @@ actions(Children) ->
                        VBucket <- VBuckets].
 
 kill_vbuckets(Node, Bucket, VBuckets) ->
+    ?log_info("~s at ~p: killing vbuckets: ~p~n", [Bucket, Node, VBuckets]),
     {ok, States} = ns_memcached:list_vbuckets(Node, Bucket),
     case [X || X = {V, S} <- States, lists:member(V, VBuckets), S /= replica] of
         [] ->
