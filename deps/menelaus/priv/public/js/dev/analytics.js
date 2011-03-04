@@ -1,3 +1,37 @@
+(function ($) {
+  $.fn.valCell = function () {
+    var first = $(this.get(0));
+    var cell = first.data("valCell");
+    if (cell) {
+      return cell;
+    }
+
+    cell = new Cell();
+
+    var cellSubscription = cell.subscribeValue(function (val) {
+      first.val(val);
+    });
+
+    function onValChange(e) {
+      cell.setValue($(this).val());
+    }
+
+    first.change(onValChange);
+
+    cell.detach = (function (oldDetach) {
+      return function () {
+        cellSubscription.cancel();
+        first.unbind('change', onValChange);
+        first.data("valCell", undefined);
+        return oldDetach.apply(this, arguments);
+      }
+    })(cell.detach);
+
+    first.data("valCell", cell);
+    return cell;
+  }
+})(jQuery);
+
 var SamplesRestorer = mkClass({
   initialize: function (url, options, keepSamplesCount) {
     this.birthTime = (new Date()).valueOf();
