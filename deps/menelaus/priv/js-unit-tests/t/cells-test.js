@@ -431,3 +431,45 @@ CellsTest.prototype.testCompute = function () {
 
   assertEquals(2, computations);
 }
+
+
+CellsTest.prototype.testCellsArgs = function () {
+  var cell1 = new Cell();
+  var cell2 = new Cell();
+  var invokations = 0;
+  var notifications = 0;
+  var lastValue;
+
+  var cell = Cell.args(cell1, cell2).compute(function (v, c1, c2) {
+    assertEquals("cell1", c1);
+    assertEquals("cell2", c2);
+    invokations++;
+    lastValue = {};
+    return lastValue;
+  });
+
+  cell.subscribeValue(function (val) {
+    notifications++;
+    assertEquals(lastValue, val);
+  });
+
+  assertEquals(0, invokations);
+  assertEquals(1, notifications);
+
+  Clock.tickFarAway();
+
+  assertEquals(0, invokations);
+  assertEquals(1, notifications);
+
+  cell1.setValue("cell1");
+  Clock.tickFarAway();
+
+  assertEquals(0, invokations);
+  assertEquals(1, notifications);
+
+  cell2.setValue("cell2");
+  Clock.tickFarAway();
+
+  assertEquals(1, invokations);
+  assertEquals(2, notifications);
+}

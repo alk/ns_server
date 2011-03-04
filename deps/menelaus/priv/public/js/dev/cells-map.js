@@ -217,3 +217,24 @@ Cell.computeEager = function (formula) {
 
   return new _FlexiFormulaCell(f, true);
 };
+
+Cell.args = function () {
+  var argCells = _.toArray(arguments);
+
+  function create(method, body) {
+    return method.call(Cell, function (v) {
+      var args = _.map(argCells, function (a) {return v.need(a)});
+      args.unshift(v);
+      return body.apply(this, args);
+    });
+  }
+
+  return {
+    compute: function (body) {
+      return create(Cell.compute, body);
+    },
+    computeEager: function (body) {
+      return create(Cell.computeEager, body);
+    }
+  }
+};
