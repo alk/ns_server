@@ -97,7 +97,7 @@ ln:
 clean-restart: dataclean ln ebins deps_all
 	./start_shell.sh
 
-fast-rebuild: ln ebins deps_all
+fast-rebuild: ln all
 	echo done
 
 clean-rebuild: dataclean ln ebins deps_all
