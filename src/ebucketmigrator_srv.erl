@@ -45,7 +45,7 @@
                }).
 
 %% external API
--export([start_link/3]).
+-export([start_link/3, start_link/4]).
 
 -include("mc_constants.hrl").
 -include("mc_entry.hrl").
@@ -282,7 +282,11 @@ confirm_sent_messages(State) ->
 %%
 
 start_link(Src, Dst, Opts) ->
-    proc_lib:start_link(?MODULE, init, [{Src, Dst, Opts}]).
+    start_link(node(), Src, Dst, Opts).
+
+%% Starts ebucketmigrator on the `Node'.
+start_link(Node, Src, Dst, Opts) ->
+    misc:start_link(Node, ?MODULE, init, [{Src, Dst, Opts}]).
 
 
 %%
