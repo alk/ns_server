@@ -164,7 +164,7 @@ rebalance(KeepNodes, EjectNodes, FailedNodes) ->
 rebalance(Bucket, Config, KeepNodes, BucketCompletion, NumBuckets) ->
     Map = proplists:get_value(map, Config),
     {FastForwardMap, MapOptions} = generate_vbucket_map(Map, KeepNodes, Config),
-    ?log_info("Target map: ~p", [FastForwardMap]),
+    ?log_info("Target map (distance: ~p):~n~p", [(catch mb_map:vbucket_movements(Map, FastForwardMap)), FastForwardMap]),
     ns_bucket:update_vbucket_map_history(FastForwardMap, MapOptions),
     ns_bucket:set_fast_forward_map(Bucket, FastForwardMap),
     ProgressFun =
