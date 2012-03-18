@@ -1201,3 +1201,32 @@ atomic_write_file(Path, Contents) ->
             file:rename(TmpPath, Path);
         X -> X
     end.
+
+with_trap_exit_enabled(Body) ->
+    OldValue = erlang:process_flag(trap_exit, true),
+    OnAfter = fun (T, E) ->
+                      erlang:process_flag(trap_exit, OldValue),
+                      case OldValue of
+                          false ->
+                              receive
+                                  {'EXIT', _From, Reason} = ExitSignal ->
+                                      case T of
+                                          undefined ->
+                                              ?log_error("Eating the following exception while disabling trap_exits:~n~p~n~p", [T, E, erlang:get_stacktrace()]);
+                                          _ -> ok
+                                      end,
+                                      ?log_debug("Doing exit because of exit signal: ~p", [ExitSignal]),
+                                      exit(Reason)
+                              after 0 -> ok
+                              end;
+                          _ ->
+                              ok
+                      end
+              end,
+    RV = try
+             Body()
+         catch T:E ->
+                 OnAfter(T,E)
+         end,
+    OnAfter(undefined, undefined),
+    RV.
