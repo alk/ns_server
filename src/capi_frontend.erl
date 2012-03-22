@@ -521,9 +521,9 @@ valid_ddoc(Doc) ->
 
 validate_ddoc(Doc) ->
 
-    #doc{body={Fields}, content_meta=Meta} = couch_doc:with_ejson_body(Doc),
+    #doc{json={Fields}, meta=Meta} = couch_doc:with_ejson_body(Doc),
 
-    Meta == ?CONTENT_META_JSON
+    Meta =/= [att_reason,<<"invalid_json">>]
         orelse throw(invalid_json),
 
     is_json_object(couch_util:get_value(<<"options">>, Fields, {[]}))
