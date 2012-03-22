@@ -23,7 +23,7 @@
 -include("mc_constants.hrl").
 
 get_missing_revs(#db{name = BucketBin,
-                     filepath = undefined}, JsonDocIdRevs) ->
+                     filepath = undefined, user_ctx = UserCtx}, JsonDocIdRevs) ->
     Bucket = binary_to_list(BucketBin),
 
     Results =
@@ -31,7 +31,7 @@ get_missing_revs(#db{name = BucketBin,
           fun ({Id, Rev}, Acc) ->
                   {VBucket, _Node} = cb_util:vbucket_from_id(Bucket, Id),
 
-                  case is_missing_rev(Bucket, VBucket, Id, Rev) of
+                  case is_missing_rev(Bucket, VBucket, Id, Rev, UserCtx) of
                       false ->
                           Acc;
                       true ->
@@ -41,13 +41,13 @@ get_missing_revs(#db{name = BucketBin,
                   throw(unsupported)
           end, [], JsonDocIdRevs),
     {ok, Results};
-get_missing_revs(#db{name = DbName}, JsonDocIdRevs) ->
+get_missing_revs(#db{name = DbName} = Db, JsonDocIdRevs) ->
     {Bucket, VBucket} = capi_utils:split_dbname(DbName),
 
     Results =
         lists:foldr(
           fun ({Id, Rev}, Acc) ->
-                  case is_missing_rev(Bucket, VBucket, Id, Rev) of
+                  case is_missing_rev(Bucket, VBucket, Id, Rev, Db) of
                       false ->
                           Acc;
                       true ->
@@ -58,9 +58,9 @@ get_missing_revs(#db{name = DbName}, JsonDocIdRevs) ->
           end, [], JsonDocIdRevs),
     {ok, Results}.
 
-is_missing_rev(Bucket, VBucket, Id, Rev) ->
-    case capi_utils:get_meta(Bucket, VBucket, Id) of
-        {error, enoent, _CAS} ->
+is_missing_rev(Bucket, VBucket, Id, Rev, DbOrCtx) ->
+    case capi_utils:get_meta(Bucket, VBucket, Id, DbOrCtx) of
+        {error, enoent} ->
             true;
         {error, not_my_vbucket} ->
             throw({bad_request, not_my_vbucket});
@@ -88,7 +88,7 @@ make_return_tuple({ok, Errors}) ->
     end.
 
 update_replicated_docs(#db{name = BucketBin,
-                           filepath = undefined},
+                           filepath = undefined, user_ctx = UserCtx},
                        Docs, Options) ->
     Bucket = binary_to_list(BucketBin),
 
@@ -104,7 +104,7 @@ update_replicated_docs(#db{name = BucketBin,
           fun (#doc{id = Id, rev = Rev} = Doc, ErrorsAcc) ->
                   {VBucket, _Node} = cb_util:vbucket_from_id(Bucket, Id),
 
-                  case do_update_replicated_doc(Bucket, VBucket, Doc) of
+                  case do_update_replicated_doc(Bucket, VBucket, UserCtx, Doc) of
                       ok ->
                           ErrorsAcc;
                       {error, Error} ->
@@ -114,7 +114,7 @@ update_replicated_docs(#db{name = BucketBin,
           [], Docs),
 
     make_return_tuple({ok, Errors});
-update_replicated_docs(#db{name = DbName}, Docs, Options) ->
+update_replicated_docs(#db{name = DbName} = Db, Docs, Options) ->
     {Bucket, VBucket} = capi_utils:split_dbname(DbName),
 
     case proplists:get_value(all_or_nothing, Options, false) of
@@ -127,7 +127,7 @@ update_replicated_docs(#db{name = DbName}, Docs, Options) ->
     Errors =
         lists:foldr(
           fun (#doc{id = Id, rev = Rev} = Doc, ErrorsAcc) ->
-                  case do_update_replicated_doc(Bucket, VBucket, Doc) of
+                  case do_update_replicated_doc(Bucket, VBucket, Db, Doc) of
                       ok ->
                           ErrorsAcc;
                       {error, Error} ->
@@ -139,24 +139,24 @@ update_replicated_docs(#db{name = DbName}, Docs, Options) ->
     make_return_tuple({ok, Errors}).
 
 update_replicated_doc(#db{name = BucketBin,
-                          filepath = undefined},
+                          filepath = undefined, user_ctx = UserCtx},
                       #doc{id = Id} = Doc,
                       _Options) ->
     Bucket = binary_to_list(BucketBin),
     {VBucket, _Node} = cb_util:vbucket_from_id(Bucket, Id),
 
-    case do_update_replicated_doc(Bucket, VBucket, Doc) of
+    case do_update_replicated_doc(Bucket, VBucket, UserCtx, Doc) of
         ok ->
             ok;
         {error, Error} ->
             throw(Error)
     end;
-update_replicated_doc(#db{name = DbName},
+update_replicated_doc(#db{name = DbName} = Db,
                       #doc{} = Doc,
                       _Options)->
     {Bucket, VBucket} = capi_utils:split_dbname(DbName),
 
-    case do_update_replicated_doc(Bucket, VBucket, Doc) of
+    case do_update_replicated_doc(Bucket, VBucket, Db, Doc) of
         ok ->
             ok;
         {error, Error} ->
@@ -180,10 +180,10 @@ winner_helper(Theirs, Ours) ->
             theirs
     end.
 
-do_update_replicated_doc(_Bucket, _VBucket,
+do_update_replicated_doc(_Bucket, _VBucket, _DbOrCtx,
                          #doc{id = <<?LOCAL_DOC_PREFIX, _/binary>>}) ->
     ok;
-do_update_replicated_doc(Bucket, VBucket,
+do_update_replicated_doc(Bucket, VBucket, DbOrCtx,
                          #doc{id = Id, rev = Rev,
                               body = Value0, deleted = Deleted} = _Doc) ->
     case Value0 of
@@ -192,14 +192,15 @@ do_update_replicated_doc(Bucket, VBucket,
     _ ->
         Value = Value0
     end,
-    do_update_replicated_doc_loop(Bucket, VBucket, Id, Rev, Value, Deleted).
+    do_update_replicated_doc_loop(Bucket, DbOrCtx, VBucket,
+                                  Id, Rev, Value, Deleted).
 
-do_update_replicated_doc_loop(Bucket, VBucket, DocId,
+do_update_replicated_doc_loop(Bucket, DbOrCtx, VBucket, DocId,
                               {DocSeqNo, DocRevId} = DocRev,
                               DocValue, DocDeleted) ->
     RV =
-        case capi_utils:get_meta(Bucket, VBucket, DocId) of
-            {error, enoent, _CAS} ->
+        case capi_utils:get_meta(Bucket, VBucket, DocId, DbOrCtx) of
+            {error, enoent} ->
                 case DocDeleted of
                     true ->
                         %% TODO: we must preserve source revision here
@@ -239,7 +240,7 @@ do_update_replicated_doc_loop(Bucket, VBucket, DocId,
 
     case RV of
         retry ->
-            do_update_replicated_doc_loop(Bucket, VBucket, DocId,
+            do_update_replicated_doc_loop(Bucket, DbOrCtx, VBucket, DocId,
                                           DocRev, DocValue, DocDeleted);
         _Other ->
             RV
