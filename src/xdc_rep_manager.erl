@@ -85,11 +85,8 @@
     to_binary/1
 ]).
 
-% Maximum number of concurrent vbucket replications allowed per doc
--define(MAX_CONCURRENT_REPS_PER_DOC, 32).
-
-% Number of seconds after which the scheduler will periodically wakeup
--define(XDCR_SCHEDULING_INTERVAL, 5).
+-define(INITIAL_WAIT, 2). % seconds
+-define(RETRY_INTERVAL, 60). % seconds
 
 -define(XSTORE, xdc_rep_info_store).
 -define(X2CSTORE, xdc_docid_to_couch_rep_pid_store).
@@ -138,10 +135,14 @@ init(_) ->
                             end,
     ns_pubsub:subscribe_link(ns_config_events, NsConfigEventsHandler, []),
 
-    SchedulingInterval = misc:getenv_int("XDCR_SCHEDULING_INTERVAL",
-                                         ?XDCR_SCHEDULING_INTERVAL),
-    {ok, _Tref} = timer:send_interval(SchedulingInterval * 1000,
-                                      manage_vbucket_replications),
+    % Periodically check whether any Couch replications have failed due to
+    % errors and, if so, restart them. Among other reasons, Couch replications
+    % may fail due to rebalance and failover operations at the destination.
+    % Checking periodically in this manner allows us to batch several failed
+    % replications together and only read the destination vbucket map once
+    % before retrying all of them.
+    {ok, _Tref} = timer:send_interval(?RETRY_INTERVAL * 1000,
+                                      retry_failed_couch_replications),
 
     <<"_replicator">> = ?l2b(couch_config:get("replicator", "db",
                                               "_replicator")),
@@ -245,9 +246,9 @@ handle_info({buckets, Buckets0}, State) ->
     {noreply, State};
 
 
-handle_info(manage_vbucket_replications, State) ->
-    _NumMsgs = misc:flush(manage_vbucket_replications),
-    manage_vbucket_replications(),
+handle_info(retry_failed_couch_replications, State) ->
+    _NumMsgs = misc:flush(retry_failed_couch_replications),
+    maybe_retry_all_couch_replications(),
     {noreply, State};
 
 
@@ -275,11 +276,11 @@ handle_info({'DOWN', _Ref, process, Pid, Reason}, State) ->
         case Reason of
             normal ->
                 % Couch replication completed normally
-                true = ets:update_element(?CSTORE, Pid, {4, completed});
+                couch_replication_completed(XDocId, Pid, Vb);
             _ ->
                 % Couch replication failed due to an error. Update the state
                 % in CSTORE so that it may be picked up the next time
-                % manage_vbucket_replications() is run by the timer
+                % maybe_retry_all_couch_replications() is run by the timer
                 % module.
                 true = ets:update_element(?CSTORE, Pid, {4, error}),
                 couch_replication_manager:update_rep_doc(
@@ -409,10 +410,14 @@ start_xdc_replication(#rep{id = XRepId,
         ?log_error("~s: target bucket not found", [XDocId]),
         true = ets:insert(?XSTORE, {XDocId, XRep, [], []}),
         {error, not_present};
-    {{ok, SrcBucketConfig}, _} ->
+    {{ok, SrcBucketConfig}, {ok, {TgtVbMap, TgtNodes}}} ->
         MyVbs = xdc_rep_utils:my_active_vbuckets(SrcBucketConfig),
-        true = ets:insert(?XSTORE, {XDocId, XRep, MyVbs}),
-        create_xdc_rep_info_doc(XDocId, XRepId, MyVbs, RepDbName, XDocBody),
+        {TriggeredVbs, UntriggeredVbs} = start_vbucket_replications(
+            XDocId, SrcBucket, TgtVbMap, TgtNodes, MyVbs, 0),
+        true = ets:insert(?XSTORE, {XDocId, XRep, TriggeredVbs,
+                                    UntriggeredVbs}),
+        create_xdc_rep_info_doc(XDocId, XRepId, TriggeredVbs, UntriggeredVbs,
+                                RepDbName, XDocBody),
         ok
     end.
 
@@ -459,17 +464,36 @@ maybe_cancel_xdc_replication(XDocId) ->
 
 maybe_adjust_all_replications(BucketConfigs) ->
     lists:foreach(
-        fun([XDocId, #rep{source = SrcBucket}, PrevVbs]) ->
+        fun([XDocId,
+             #rep{source = SrcBucket,
+                  target = {_, TgtBucket, _, _, _, _, _, _, _, _}},
+             PrevTriggeredVbs,
+             PrevUntriggeredVbs]) ->
             SrcBucketConfig =
                 proplists:get_value(?b2l(SrcBucket), BucketConfigs),
             CurrVbs = xdc_rep_utils:my_active_vbuckets(SrcBucketConfig),
-            maybe_adjust_xdc_replication(XDocId, PrevVbs, CurrVbs)
+            maybe_adjust_xdc_replication(
+                XDocId, SrcBucket, TgtBucket, PrevTriggeredVbs,
+                PrevUntriggeredVbs, CurrVbs)
         end,
-        ets:match(?XSTORE, {'$1', '$2', '$3'})).
+        ets:match(?XSTORE, {'$1', '$2', '$3', '$4'})).
 
 
-maybe_adjust_xdc_replication(XDocId, PrevVbs, CurrVbs) ->
-    {_AcquiredVbs, LostVbs} = xdc_rep_utils:lists_difference(CurrVbs, PrevVbs),
+maybe_adjust_xdc_replication(XDocId, SrcBucket, TgtBucket, PrevTriggeredVbs,
+                             PrevUntriggeredVbs, CurrVbs) ->
+    PrevVbs = PrevTriggeredVbs ++ PrevUntriggeredVbs,
+    {AcquiredVbs, LostVbs} = xdc_rep_utils:lists_difference(CurrVbs, PrevVbs),
+
+    % Start Couch replications for the newly acquired vbuckets
+    {ok, {TgtVbMap, TgtNodes}} =
+        xdc_rep_utils:remote_vbucketmap_nodelist(TgtBucket),
+    {TriggeredVbs1, UntriggeredVbs1} = start_vbucket_replications(
+        XDocId, SrcBucket, TgtVbMap, TgtNodes, AcquiredVbs, 0),
+
+    % Add entries for the new Couch replications to the replication info doc
+    couch_replication_manager:update_rep_doc(
+        xdc_rep_utils:info_doc_id(XDocId),
+        xdc_rep_utils:vb_rep_state_list(TriggeredVbs1, <<"triggered">>)),
 
     % Cancel Couch replications for the lost vbuckets
     CRepPidsToCancel =
@@ -493,24 +517,39 @@ maybe_adjust_xdc_replication(XDocId, PrevVbs, CurrVbs) ->
         xdc_rep_utils:vb_rep_state_list(LostVbs, <<"cancelled">>)),
 
     % Update XSTORE with the current active vbuckets list
-    true = ets:update_element(?XSTORE, XDocId, [{3, CurrVbs}]).
+    CurrTriggeredVbs = CurrVbs -- (PrevUntriggeredVbs ++ UntriggeredVbs1),
+    CurrUntriggeredVbs = CurrVbs -- CurrTriggeredVbs,
+    true = ets:update_element(?XSTORE, XDocId,
+                              [{3, CurrTriggeredVbs}, {4, CurrUntriggeredVbs}]).
 
 
-start_vbucket_replication(XDocId, SrcBucket, {TgtVbMap, TgtNodes}, Vb) ->
-    SrcURI = xdc_rep_utils:local_couch_uri_for_vbucket(SrcBucket, Vb),
-    TgtURI = xdc_rep_utils:remote_couch_uri_for_vbucket(TgtVbMap, TgtNodes, Vb),
-    start_couch_replication(SrcURI, TgtURI, Vb, XDocId).
+% Given a list of vbuckets, this function attempts to trigger Couch replication
+% for each vbucket using the provided parameters. The lists of vbuckets for
+% which trigger was successful and for which it failed, respectively, are
+% returned as a tuple.
+start_vbucket_replications(XDocId, SrcBucket, TgtVbMap, TgtNodes, VbList,
+                           Wait) ->
+    lists:foldl(
+        fun(Vb, {TriggeredVbs, UntriggeredVbs}) ->
+            SrcURI = xdc_rep_utils:local_couch_uri_for_vbucket(
+                SrcBucket, Vb),
+            TgtURI = xdc_rep_utils:remote_couch_uri_for_vbucket(
+                TgtVbMap, TgtNodes, Vb),
+            case start_couch_replication(SrcURI, TgtURI, Vb, XDocId, Wait) of
+            {ok, _Res} ->
+                {[Vb | TriggeredVbs], UntriggeredVbs};
+            _Error ->
+                {TriggeredVbs, [Vb | UntriggeredVbs]}
+            end
+        end,
+        {[], []}, VbList).
 
-
-restart_vbucket_replication(XDocId, SrcBucket, TgtVbInfo, Vb, CRepPid) ->
-    cancel_couch_replication(XDocId, CRepPid),
-    start_vbucket_replication(XDocId, SrcBucket, TgtVbInfo, Vb).
 
 %
 % Couch specific functions
 %
 
-start_couch_replication(SrcCouchURI, TgtCouchURI, Vb, XDocId) ->
+start_couch_replication(SrcCouchURI, TgtCouchURI, Vb, XDocId, Wait) ->
     % Until scheduled XDC replication support is added, this function will
     % trigger continuous replication by default at the Couch level.
     {ok, CRep} =
@@ -520,97 +559,141 @@ start_couch_replication(SrcCouchURI, TgtCouchURI, Vb, XDocId) ->
               {<<"worker_processes">>, 1},
               {<<"http_connections">>, 10},
               {<<"connection_timeout">>, 300000},
-              {<<"continuous">>, false}
+              {<<"continuous">>, true}
              ]},
             #user_ctx{roles = [<<"_admin">>]}),
 
+    ok = timer:sleep(Wait * 1000),
     case couch_replicator:async_replicate(CRep) of
-    {ok, CRepPid} ->
+    {ok, CRepPid} = Result ->
         erlang:monitor(process, CRepPid),
         CRepState = triggered,
-        true = ets:insert(?CSTORE, {CRepPid, CRep, Vb, CRepState}),
+        true = ets:insert(?CSTORE, {CRepPid, CRep, Vb, CRepState, Wait}),
         true = ets:insert(?X2CSTORE, {XDocId, CRepPid}),
-        couch_replication_manager:update_rep_doc(
-            xdc_rep_utils:info_doc_id(XDocId),
-            [{?l2b("replication_state_vb_" ++ ?i2l(Vb)), <<"triggered">>}]),
         ?log_info("~s: triggered replication for vbucket ~p", [XDocId, Vb]),
-        {ok, CRepPid};
+        Result;
     Error ->
         ?log_info("~s: triggering of replication for vbucket ~p failed due to: "
                   "~p", [XDocId, Vb, Error]),
-        {error, Error}
+        Error
     end.
 
 
 cancel_couch_replication(XDocId, CRepPid) ->
-    [CRep, CRepState] =
-        lists:flatten(ets:match(?CSTORE, {CRepPid, '$1', '_', '$2'})),
-    case CRepState of
-    triggered ->
-        couch_replicator:cancel_replication(CRep#rep.id);
-    _ ->
-        ok
+    [CRep, Vb] =
+        lists:flatten(ets:match(?CSTORE, {CRepPid, '$1', '$2', '_', '_'})),
+
+    case couch_replicator:cancel_replication(CRep#rep.id) of
+    {ok, _Res} ->
+        ?log_info("~s: cancelled replication for vbucket ~p", [XDocId, Vb]);
+    Error ->
+        ?log_info("~s: cancellation of replication for vbucket ~p failed due "
+                  "to: ~p", [XDocId, Vb, Error])
     end,
+
     true = ets:delete(?CSTORE, CRepPid),
     true = ets:delete_object(?X2CSTORE, {XDocId, CRepPid}),
     ok.
 
 
-manage_vbucket_replications() ->
+maybe_retry_all_couch_replications() ->
     lists:foreach(
         fun([XDocId,
              #rep{source = SrcBucket,
                   target = {_, TgtBucket, _, _, _, _, _, _, _, _}},
-             Vbs]) ->
+             TriggeredVbs, UntriggeredVbs]) ->
 
-            MaxConcurrentReps = misc:getenv_int("MAX_CONCURRENT_REPS_PER_DOC",
-                                                ?MAX_CONCURRENT_REPS_PER_DOC),
-            NumActiveReps = length(active_replications_for_doc(XDocId)),
-            case (MaxConcurrentReps - NumActiveReps) of
-            0 ->
-                ok;
-            NumFreeSlots ->
-                {Vbs1, Vbs2} = lists:split(NumFreeSlots, Vbs),
-
+            FailedCouchReps = failed_couch_replications(XDocId),
+            case {FailedCouchReps, UntriggeredVbs} of
+            {[], []} ->
+                ?log_info("~s: no failed vbucket replications found", [XDocId]);
+            {_, _} ->
                 % Reread the target vbucket map once before retrying all reps
-                {ok, TgtVbInfo} =
+                {ok, {TgtVbMap, TgtNodes} = TgtVbInfo} =
                     xdc_rep_utils:remote_vbucketmap_nodelist(TgtBucket),
 
-                lists:foreach(
-                    fun(Vb) ->
-                        case lists:flatten(ets:match(
-                            ?CSTORE, {'$1', '_', Vb, '$2'})) of
-                        [] ->
-                            % New vbucket
-                            start_vbucket_replication(XDocId, SrcBucket,
-                                TgtVbInfo, Vb);
-                        [CRepPid, error] ->
-                            % Failed vbucket
-                            restart_vbucket_replication(XDocId, SrcBucket,
-                                TgtVbInfo, Vb, CRepPid);
-                        [CRepPid, completed] ->
-                            % Completed vbucket
-                            restart_vbucket_replication(XDocId, SrcBucket,
-                                TgtVbInfo, Vb, CRepPid);
-                        [_, triggered] ->
-                            % In progress vbucket
-                            ok
-                        end
-                    end, Vbs1),
+                % Retry couch replications that failed after they were triggered
+                Success = lists:foldl(
+                    fun(FailedCouchRep, Success0) ->
+                        retry_couch_replication(XDocId, SrcBucket, TgtVbInfo,
+                                                FailedCouchRep) and Success0
+                    end,
+                    true, FailedCouchReps),
 
-                % Update XSTORE with the new vbuckets list
-                true = ets:update_element(?XSTORE, XDocId, [{3, (Vbs2 ++ Vbs1)}])
+                % Retry couch replications that did not trigger at all
+                {TriggeredVbs1, UntriggeredVbs1} = start_vbucket_replications(
+                    XDocId, SrcBucket, TgtVbMap, TgtNodes, UntriggeredVbs, 0),
+                true = ets:update_element(
+                    ?XSTORE, XDocId, [{3, (TriggeredVbs ++ TriggeredVbs1)},
+                                      {4, UntriggeredVbs1}]),
+                couch_replication_manager:update_rep_doc(
+                    xdc_rep_utils:info_doc_id(XDocId),
+                    xdc_rep_utils:vb_rep_state_list(
+                        TriggeredVbs1, <<"triggered">>)),
+
+                case {Success, UntriggeredVbs1} of
+                {true, []} ->
+                    couch_replication_manager:update_rep_doc(
+                        xdc_rep_utils:info_doc_id(XDocId),
+                        [{<<"_replication_state">>, <<"triggered">>}]);
+                _ ->
+                    ok
+                end
             end
         end,
-        ets:match(?XSTORE, {'$1', '$2', '$3'})).
+        ets:match(?XSTORE, {'$1', '$2', '$3', '$4'})).
 
 
-active_replications_for_doc(XDocId) ->
+retry_couch_replication(XDocId,
+                        SrcBucket,
+                        {TgtVbMap, TgtNodes},
+                        {CRepPid, Vb, Wait}) ->
+    cancel_couch_replication(XDocId, CRepPid),
+
+    NewWait = erlang:max(?INITIAL_WAIT, trunc(Wait * 2)),
+    SrcURI = xdc_rep_utils:local_couch_uri_for_vbucket(SrcBucket, Vb),
+    TgtURI = xdc_rep_utils:remote_couch_uri_for_vbucket(TgtVbMap, TgtNodes, Vb),
+    ?log_info("~s: will retry replication for vbucket ~p after ~p seconds",
+              [XDocId, Vb, NewWait]),
+    case start_couch_replication(SrcURI, TgtURI, Vb, XDocId, NewWait) of
+    {ok, _Res} ->
+        couch_replication_manager:update_rep_doc(
+            xdc_rep_utils:info_doc_id(XDocId),
+            [{?l2b("replication_state_vb_" ++ ?i2l(Vb)), <<"triggered">>}]),
+        true;
+    _Error ->
+        false
+    end.
+
+
+couch_replication_completed(XDocId, CRepPid, Vb) ->
+    true = ets:delete(?CSTORE, CRepPid),
+    true = ets:delete_object(?X2CSTORE, {XDocId, CRepPid}),
+    ?log_info("~s: replication of vbucket ~p completed", [XDocId, Vb]),
+
+    case ets:lookup(?X2CSTORE, XDocId) of
+    [] ->
+        % All couch replications for this XDocId have completed.
+        true = ets:delete(?XSTORE, XDocId),
+        couch_replication_manager:update_rep_doc(
+            xdc_rep_utils:info_doc_id(XDocId),
+            [{?l2b("replication_state_vb_" ++ ?i2l(Vb)), <<"completed">>},
+             {<<"_replication_state">>, <<"completed">>}]),
+        ?log_info("~s: replication of all vbuckets completed", [XDocId]);
+    _ ->
+        couch_replication_manager:update_rep_doc(
+            xdc_rep_utils:info_doc_id(XDocId),
+            [{?l2b("replication_state_vb_" ++ ?i2l(Vb)), <<"completed">>}])
+    end.
+
+
+failed_couch_replications(XDocId) ->
     % For the given XDocId:
     % 1. Lookup all CRepPids in X2CSTORE.
     % 2. For each CRepPid, lookup its record in CSTORE.
-    % 3. Only select records whose State attribute equals 'triggered'.
-    % 4. Return the list of records found.
+    % 3. Only select records whose State attribute equals 'error'.
+    % 4. Filter out CRep and State in the final output and just return the
+    %    CRepPid, Vb and Wait attributes.
     Pids =
         try
             ets:lookup_element(?X2CSTORE, XDocId, 2)
@@ -618,22 +701,28 @@ active_replications_for_doc(XDocId) ->
         error:badarg ->
             []
         end,
-    [{CRepPid} ||
-        {CRepPid, _CRep, _, State} <-
+    [{CRepPid, Vb, Wait} ||
+        {CRepPid, _CRep, Vb, State, Wait} <-
             lists:flatten([(ets:lookup(?CSTORE, Pid)) || Pid <- Pids]),
-        State == triggered].
+        State == error].
 
 
 %
 % XDC replication and replication info document related functions
 %
 
-create_xdc_rep_info_doc(XDocId, {Base, Ext}, Vbs, RepDbName, XDocBody) ->
+create_xdc_rep_info_doc(XDocId, {Base, Ext}, TriggeredVbs, UntriggeredVbs,
+                        RepDbName, XDocBody) ->
     IDocId = xdc_rep_utils:info_doc_id(XDocId),
     UserCtx = #user_ctx{roles = [<<"_admin">>, <<"_replicator">>]},
     {ok, RepDb} = couch_db:open(RepDbName, [sys_db, {user_ctx, UserCtx}]),
 
-    VbStates =  xdc_rep_utils:vb_rep_state_list(Vbs, <<"undefined">>),
+    TriggeredVbStates = xdc_rep_utils:vb_rep_state_list(
+        TriggeredVbs, <<"triggered">>),
+    UntriggeredVbStates =  xdc_rep_utils:vb_rep_state_list(
+        UntriggeredVbs, <<"undefined">>),
+    AllVbStates = TriggeredVbStates ++ UntriggeredVbStates,
+
     Body = {[
              {<<"node">>, xdc_rep_utils:node_uuid()},
              {<<"replication_doc_id">>, XDocId},
@@ -641,7 +730,7 @@ create_xdc_rep_info_doc(XDocId, {Base, Ext}, Vbs, RepDbName, XDocBody) ->
              {<<"replication_fields">>, XDocBody},
              {<<"source">>, <<"">>},
              {<<"target">>, <<"">>} |
-             VbStates
+             AllVbStates
             ]},
 
     case couch_db:open_doc(RepDb, IDocId, [ejson_body]) of
@@ -651,8 +740,14 @@ create_xdc_rep_info_doc(XDocId, {Base, Ext}, Vbs, RepDbName, XDocBody) ->
         couch_db:update_doc(RepDb, #doc{id = IDocId, body = Body}, [])
     end,
 
-    couch_replication_manager:update_rep_doc(
-        IDocId, [{<<"_replication_state">>, <<"triggered">>}]),
+    case UntriggeredVbs of
+    [] ->
+        couch_replication_manager:update_rep_doc(
+            IDocId, [{<<"_replication_state">>, <<"triggered">>}]);
+    _ ->
+        couch_replication_manager:update_rep_doc(
+            IDocId, [{<<"_replication_state">>, <<"error">>}])
+    end,
     couch_db:close(RepDb),
 
     ?log_info("~s: created replication info doc ~s", [XDocId, IDocId]),
