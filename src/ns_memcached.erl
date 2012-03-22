@@ -513,8 +513,7 @@ set(Bucket, Key, VBucket, Value) ->
 set_with_meta(Bucket, Key, VBucket, Value, Meta, CAS, Flags, Expiration) ->
     gen_server:call({server(Bucket, data), node()},
                     {set_with_meta,
-                     Key, VBucket, Value, Meta, CAS, Flags, Expiration},
-                    ?TIMEOUT).
+                     Key, VBucket, Value, Meta, CAS, Flags, Expiration}).
 
 set_with_meta(Bucket, Key, VBucket, Value, Meta) ->
     set_with_meta(Bucket, Key, VBucket, Value, Meta, 0, 0, 0).
