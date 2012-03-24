@@ -29,9 +29,13 @@
          replicators/2,
          set_replicas/2,
          apply_changes/2,
-         spawn_mover/4]).
+         spawn_mover/4,
+         have_local_change_vbucket_filter/0,
+         local_change_vbucket_filter/4]).
 
 -export([init/1]).
+
+-compile([{parse_transform, quote_transform}]).
 
 %%
 %% API
@@ -281,6 +285,44 @@ server(Bucket) ->
     list_to_atom(?MODULE_STRING "-" ++ Bucket).
 
 
+have_local_change_vbucket_filter() ->
+    true.
+
+local_change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node=DstNode} = ChildId, NewVBuckets) ->
+    Server = server(Bucket),
+    Args = args(SrcNode, Bucket, NewVBuckets, DstNode, false),
+    Childs = supervisor:which_children(Server),
+    MaybeThePid = [Pid || {Id, Pid, _, _} <- Childs,
+                          Id =:= ChildId],
+    case MaybeThePid of
+        [ThePid] ->
+            {ok, Substance} = ebucketmigrator_srv:leech_life(ThePid),
+            ok = supervisor:terminate_child(Server, ChildId),
+            ok = supervisor:delete_child(Server, ChildId),
+            NewChildSpec = {#child_id{vbuckets=NewVBuckets, dest_node=DstNode},
+                            {ebucketmigrator_srv, start_link_with_substance, [Substance | Args]},
+                            permanent, 60000, worker, [ebucketmigrator_srv]},
+            {ok, supervisor:start_child(Server, NewChildSpec)};
+        [] ->
+            no_child
+    end.
+
+change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node = DstNode} = ChildId, NewVBuckets) ->
+    Lambda = quote_transform:lambda(fun (Bucket, SrcNode, ChildId, NewVBuckets) ->
+                                            try ns_vbm_sup:have_local_change_vbucket_filter() of
+                                                true -> ns_vbm_sup:local_change_vbucket_filter(Bucket, SrcNode, ChildId, NewVBuckets)
+                                            catch error:undef ->
+                                                    old_version
+                                            end
+                                    end),
+    case rpc:call(SrcNode, erlang, apply, [Lambda, [Bucket, SrcNode, ChildId, NewVBuckets]]) of
+        old_version ->
+            kill_child(SrcNode, Bucket, ChildId),
+            start_child(SrcNode, Bucket, NewVBuckets, DstNode);
+        {ok, Ref} ->
+            Ref
+    end.
+
 %% @doc Set up replication from the given source node to a list of
 %% {VBucket, DstNode} pairs.
 set_replicas(SrcNode, Bucket, Replicas) ->
@@ -302,6 +344,9 @@ set_replicas(SrcNode, Bucket, Replicas) ->
                     case dict:find(DstNode, DesiredReplicaDict) of
                         {ok, VBuckets} ->
                             %% Already running
+                            dict:erase(DstNode, D);
+                        {ok, NewVBuckets} ->
+                            change_vbucket_filter(Bucket, SrcNode, Id, NewVBuckets),
                             dict:erase(DstNode, D);
                         _ ->
                             %% Either wrong vbuckets or not wanted at all

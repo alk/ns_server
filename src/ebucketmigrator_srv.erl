@@ -44,10 +44,11 @@
                }).
 
 %% external API
--export([start_link/3, start_link/4]).
+-export([start_link/3, start_link/4, leech_life/1, start_link_with_substance/4]).
 
 -include("mc_constants.hrl").
 -include("mc_entry.hrl").
+
 
 %%
 %% gen_server callback implementation
@@ -56,6 +57,45 @@
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+do_nothing() ->
+    receive
+        {'EXIT', _From, Reason} = ExitMsg ->
+            ?log_debug("Got exit signal: ~p", [ExitMsg]),
+            exit(Reason);
+        X ->
+            ?log_debug("leeched ebucketmigrator got message:~n~p", [X]),
+            do_nothing()
+    end.
+
+-spec start_substance(pid(), #state{}) -> no_return().
+start_substance(Pid, #state{downstream = Downstream} = State) ->
+    erlang:link(Pid),
+    gen_tcp:controlling_process(Downstream, self()),
+    erlang:link(Downstream),
+    proc_lib:init_ack({ok, self()}),
+    substance_loop(State).
+
+substance_loop(State) ->
+    receive
+        {'$gen_call', From, Msg} ->
+            check_downstream = Msg,
+            RV = confirm_sent_messages(State),
+            gen_server:reply(From, {RV, State}),
+            exit(normal);
+        {'EXIT', _From, Reason} = ExitMsg ->
+            ?log_debug("Substance is dying: ~p", [ExitMsg]),
+            exit(Reason);
+        X ->
+            exit({unknown_message, X})
+    end.
+
+handle_call({leech_life, Pid}, From, #state{downstream = Downstream} = State) ->
+    terminate(leeched, State),
+    State2 = State#state{last_sent_seqno = State#state.last_sent_seqno+1},
+    {ok, Substance} = proc_lib:start(erlang, apply, [fun start_substance/2, [Pid, State2]]),
+    gen_server:reply(From, Substance),
+    erlang:unlink(Downstream),
+    do_nothing();
 
 handle_call(_Req, _From, State) ->
     {reply, unhandled, State}.
@@ -123,8 +163,32 @@ init({Src, Dst, Opts}) ->
                true -> "rebalance_" ++ TapSuffix;
                _ -> "replication_" ++ TapSuffix
            end,
-    proc_lib:init_ack({ok, self()}),
+    Substance = proplists:get_value(substance, Opts),
+    case Substance of
+        undefined ->
+            proc_lib:init_ack({ok, self()});
+        _ ->
+            ok
+    end,
     Downstream = connect(Dst, Username, Password, Bucket),
+    SafeToReuse = case Substance of
+                      undefined ->
+                          false;
+                      _ ->
+                          case (catch gen_server:call(Substance, check_downstream)) of
+                              {ok, _OldState} ->
+                                  true;
+                              Crap ->
+                                  ?log_debug("check_downstream failed: ~p", [Crap]),
+                                  false
+                          end
+                  end,
+    case Substance of
+        undefined ->
+            ok;
+        _ ->
+            proc_lib:init_ack({ok, self()})
+    end,
     %% Set all vbuckets to the replica state on the destination node.
     lists:foreach(
       fun (VBucket) ->
@@ -164,6 +228,12 @@ init({Src, Dst, Opts}) ->
             {name, Name},
             {takeover, TakeOver}],
     ?rebalance_info("Starting tap stream:~n~p~n", [Args]),
+    case SafeToReuse of
+        false ->
+            mc_client_binary:deregister_tap_client(Upstream, iolist_to_binary(Name));
+        true ->
+            ok
+    end,
     {ok, quiet} = mc_client_binary:tap_connect(Upstream, Args),
     ok = inet:setopts(Upstream, [{active, once}]),
     ok = inet:setopts(Downstream, [{active, once}]),
@@ -200,7 +270,7 @@ exit_retry_not_ready_vbuckets() ->
 terminate(_Reason, #state{upstream_sender=UpstreamSender} = State) ->
     timer:kill_after(?TERMINATE_TIMEOUT),
     gen_tcp:close(State#state.upstream),
-    exit(UpstreamSender, kill),
+    (catch exit(UpstreamSender, kill)),
     case State#state.takeover_done of
         true ->
             ?rebalance_info("Skipping close ack for successfull takover~n", []),
@@ -228,7 +298,7 @@ read_tap_message(Sock) ->
             X2
     end.
 
-do_config_sent_messages(Sock, Seqno) ->
+do_confirm_sent_messages(Sock, Seqno) ->
     case read_tap_message(Sock) of
         {ok, Packet} ->
             <<_Magic:8, _Opcode:8, _KeyLen:16, _ExtLen:8, _DataType: 8,
@@ -238,11 +308,12 @@ do_config_sent_messages(Sock, Seqno) ->
                     ?rebalance_info("Got close ack!~n", []),
                     ok;
                 _ ->
-                    do_config_sent_messages(Sock, Seqno)
+                    do_confirm_sent_messages(Sock, Seqno)
             end;
         {error, _} = Crap ->
             ?rebalance_info("Got error while trying to read close ack:~p~n",
-                            [Crap])
+                            [Crap]),
+            Crap
     end.
 
 confirm_sent_messages(State) ->
@@ -253,11 +324,12 @@ confirm_sent_messages(State) ->
                            #mc_entry{data = <<4:16, ?TAP_FLAG_ACK:16, 1:8, 0:8, 0:8, 0:8, ?TAP_OPAQUE_CLOSE_TAP_STREAM:32>>}),
     case gen_tcp:send(Sock, Msg) of
         ok ->
-            do_config_sent_messages(Sock, Seqno);
+            do_confirm_sent_messages(Sock, Seqno);
         {error, closed} ->
             ok;
         X ->
-            ?rebalance_error("Got error while trying to send close confirmation: ~p~n", [X])
+            ?rebalance_error("Got error while trying to send close confirmation: ~p~n", [X]),
+            X
     end.
 
 %%
@@ -270,6 +342,12 @@ start_link(Src, Dst, Opts) ->
 %% Starts ebucketmigrator on the `Node'.
 start_link(Node, Src, Dst, Opts) ->
     misc:start_link(Node, ?MODULE, init, [{Src, Dst, Opts}]).
+
+start_link_with_substance(Substance, Src, Dst, Opts) ->
+    start_link(Src, Dst, [{substance, Substance} | Opts]).
+
+leech_life(Pid) ->
+    gen_server:call(Pid, {leech_life, self()}).
 
 
 %%
