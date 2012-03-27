@@ -73,14 +73,15 @@ start_substance(Pid, #state{downstream = Downstream} = State) ->
     gen_tcp:controlling_process(Downstream, self()),
     erlang:link(Downstream),
     proc_lib:init_ack({ok, self()}),
-    substance_loop(State).
+    substance_loop(State, Pid).
 
-substance_loop(State) ->
+substance_loop(State, Pid) ->
     receive
         {'$gen_call', From, Msg} ->
             check_downstream = Msg,
             RV = confirm_sent_messages(State),
             gen_server:reply(From, {RV, State}),
+            erlang:unlink(Pid),
             exit(normal);
         {'EXIT', _From, Reason} = ExitMsg ->
             ?log_debug("Substance is dying: ~p", [ExitMsg]),

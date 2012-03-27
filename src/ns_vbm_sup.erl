@@ -296,7 +296,7 @@ local_change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node=DstNode} = Chil
                           Id =:= ChildId],
     case MaybeThePid of
         [ThePid] ->
-            {ok, Substance} = ebucketmigrator_srv:leech_life(ThePid),
+            Substance = ebucketmigrator_srv:leech_life(ThePid),
             ok = supervisor:terminate_child(Server, ChildId),
             ok = supervisor:delete_child(Server, ChildId),
             NewChildSpec = {#child_id{vbuckets=NewVBuckets, dest_node=DstNode},
