@@ -31,7 +31,7 @@
 
 -record(state, {bad_vbucket_count = 0 :: non_neg_integer(),
                 upstream :: port(),
-                downstream :: port(),
+                downstream :: port() | leeched,
                 upstream_sender :: pid(),
                 upbuf = <<>> :: binary(),
                 downbuf = <<>> :: binary(),
@@ -69,6 +69,7 @@ do_nothing() ->
 
 -spec start_substance(pid(), #state{}) -> no_return().
 start_substance(Pid, #state{downstream = Downstream} = State) ->
+    erlang:process_flag(trap_exit, true),
     erlang:link(Pid),
     gen_tcp:controlling_process(Downstream, self()),
     erlang:link(Downstream),
@@ -181,8 +182,8 @@ init({Src, Dst, Opts}) ->
                       undefined ->
                           false;
                       _ ->
-                          case (catch gen_server:multi_call([node()], Substance, check_downstream, 5000)) of
-                              {[{ok, _OldState}], []} ->
+                          case (catch gen_server:call(Substance, check_downstream)) of
+                              {ok, _OldState} ->
                                   true;
                               Crap ->
                                   ?log_debug("check_downstream failed: ~p", [Crap]),
