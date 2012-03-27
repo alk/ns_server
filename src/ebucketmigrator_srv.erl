@@ -59,9 +59,9 @@ code_change(_OldVsn, State, _Extra) ->
 
 do_nothing() ->
     receive
-        {'EXIT', _From, Reason} = ExitMsg ->
+        {'EXIT', _From, _Reason} = ExitMsg ->
             ?log_debug("Got exit signal: ~p", [ExitMsg]),
-            exit(Reason);
+            exit(self(), kill);
         X ->
             ?log_debug("leeched ebucketmigrator got message:~n~p", [X]),
             do_nothing()
@@ -91,11 +91,13 @@ substance_loop(State, Pid) ->
     end.
 
 handle_call({leech_life, Pid}, From, #state{downstream = Downstream} = State) ->
+    ?log_debug("Entered leech life"),
     terminate(leeched, State),
     State2 = State#state{last_sent_seqno = State#state.last_sent_seqno+1},
     {ok, Substance} = proc_lib:start(erlang, apply, [fun start_substance/2, [Pid, State2]]),
     gen_server:reply(From, Substance),
     erlang:unlink(Downstream),
+    ?log_debug("Spawned substance (~p). Doing nothing", [Substance]),
     do_nothing();
 
 handle_call(_Req, _From, State) ->
@@ -148,6 +150,9 @@ handle_info(check_for_timeout, State) ->
 handle_info({'EXIT', Pid, Reason}, #state{upstream_sender = SenderPid} = State) when Pid =:= SenderPid ->
     ?log_error("killing myself due to unexpected upstream sender exit with reason: ~p", [Reason]),
     {stop, {unexpected_upstream_sender_exit, Reason}, State};
+handle_info({'EXIT', _Pid, Reason} = ExitSignal, State) ->
+    ?log_info("killing myself due unexpected exit signal: ~p", [ExitSignal]),
+    {stop, Reason, State};
 handle_info(Msg, State) ->
     ?rebalance_info("handle_info(~p, ~p)", [Msg, State]),
     {noreply, State}.
@@ -176,8 +181,8 @@ init({Src, Dst, Opts}) ->
                       undefined ->
                           false;
                       _ ->
-                          case (catch gen_server:call(Substance, check_downstream)) of
-                              {ok, _OldState} ->
+                          case (catch gen_server:multi_call([node()], Substance, check_downstream, 5000)) of
+                              {[{ok, _OldState}], []} ->
                                   true;
                               Crap ->
                                   ?log_debug("check_downstream failed: ~p", [Crap]),
@@ -268,7 +273,8 @@ exit_retry_not_ready_vbuckets() ->
     ?log_info("dying to check if some previously not yet ready vbuckets are ready to replicate from"),
     exit(normal).
 
-terminate(_Reason, #state{upstream_sender=UpstreamSender} = State) ->
+terminate(Reason, #state{upstream_sender=UpstreamSender} = State) ->
+    ?log_debug("Performing terminate: ~p", [{Reason, State}]),
     timer:kill_after(?TERMINATE_TIMEOUT),
     gen_tcp:close(State#state.upstream),
     (catch exit(UpstreamSender, kill)),
