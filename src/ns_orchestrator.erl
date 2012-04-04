@@ -225,6 +225,7 @@ handle_info({'EXIT', Pid, Reason}, janitor_running,
     {next_state, idle, #idle_state{remaining_buckets = Buckets}};
 handle_info({'EXIT', Pid, Reason}, rebalancing,
             #rebalancing_state{rebalancer=Pid}) ->
+    master_activity_events:note_rebalance_end(Pid, Reason),
     Status = case Reason of
                  normal ->
                      ?user_log(?REBALANCE_SUCCESSFUL,
@@ -301,13 +302,19 @@ idle({create_bucket, BucketType, BucketName, NewConfig}, _From, State) ->
                     {error, {already_exists, BucketName}}
             end,
     case Reply of
-        ok -> request_janitor_run(BucketName);
+        ok ->
+            master_activity_events:note_bucket_creation(BucketName, BucketType, NewConfig),
+            request_janitor_run(BucketName);
         _ -> ok
     end,
     {reply, Reply, idle, State};
 idle({delete_bucket, BucketName}, _From, State) ->
     Reply = ns_bucket:delete_bucket(BucketName),
-    ns_config:sync_announcements(),
+    case Reply of
+        ok -> master_activity_events:note_bucket_deletion(BucketName),
+              ns_config:sync_announcements();
+        _ -> ok
+    end,
 
     case Reply of
         ok ->
@@ -343,6 +350,7 @@ idle({delete_bucket, BucketName}, _From, State) ->
     {reply, Reply, idle, State};
 idle({failover, Node}, _From, State) ->
     ?log_info("Failing over ~p", [Node]),
+    master_activity_events:note_failover(Node),
     Result = ns_rebalancer:failover(Node),
     ?user_log(?FAILOVER_NODE, "Failed over ~p: ~p", [Node, Result]),
     ns_cluster:counter_inc(failover_node),
@@ -359,6 +367,7 @@ idle({start_rebalance, KeepNodes, EjectNodes, FailedNodes}, _From,
     ns_config:set(rebalance_status, running),
     Pid = spawn_link(
             fun () ->
+                    master_activity_events:note_rebalance_start(self(), KeepNodes, EjectNodes, FailedNodes),
                     ns_rebalancer:rebalance(KeepNodes, EjectNodes, FailedNodes)
             end),
     {reply, ok, rebalancing, #rebalancing_state{rebalancer=Pid,
