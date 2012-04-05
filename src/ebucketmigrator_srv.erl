@@ -232,7 +232,7 @@ read_tap_message(Sock) ->
             X2
     end.
 
-do_config_sent_messages(Sock, Seqno) ->
+do_confirm_sent_messages(Sock, Seqno) ->
     case read_tap_message(Sock) of
         {ok, Packet} ->
             <<_Magic:8, _Opcode:8, _KeyLen:16, _ExtLen:8, _DataType: 8,
@@ -242,7 +242,7 @@ do_config_sent_messages(Sock, Seqno) ->
                     ?rebalance_info("Got close ack!~n", []),
                     ok;
                 _ ->
-                    do_config_sent_messages(Sock, Seqno)
+                    do_confirm_sent_messages(Sock, Seqno)
             end;
         {error, _} = Crap ->
             ?rebalance_info("Got error while trying to read close ack:~p~n",
