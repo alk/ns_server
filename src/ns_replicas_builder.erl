@@ -46,9 +46,13 @@
                  ReplicateIntoNodes::[node()], JustBackfillNodes::[node()],
                  AfterDone::fun(() -> any()))-> pid().
 spawn_link(Bucket, VBucket, SrcNode, ReplicateIntoNodes, JustBackfillNodes, AfterDone) ->
-    proc_lib:spawn_link(erlang, apply,
-                        [fun build_replicas_main/6,
-                         [Bucket, VBucket, SrcNode, ReplicateIntoNodes, JustBackfillNodes, AfterDone]]).
+    spawn_link(fun () ->
+                       AfterDone(),
+                       erlang:hibernate(erlang, exit, [normal])
+               end).
+    %% proc_lib:spawn_link(erlang, apply,
+    %%                     [fun build_replicas_main/6,
+    %%                      [Bucket, VBucket, SrcNode, ReplicateIntoNodes, JustBackfillNodes, AfterDone]]).
 
 -define(COMPLETION_POLLING_INTERVAL, 10).
 
