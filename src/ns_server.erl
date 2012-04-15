@@ -103,7 +103,7 @@ init_logging() ->
 
     lists:foreach(
       fun (Logger) ->
-              ok = ale:set_loglevel(Logger, debug)
+              ok = ale:set_loglevel(Logger, warn)
       end,
       StdLoggers),
 
@@ -128,7 +128,7 @@ init_logging() ->
               fun (Logger) ->
                       %% usually used only in dev environment so it makes
                       %% sense to put all the messages here
-                      ok = ale:add_sink(Logger, stderr, debug)
+                      ok = ale:add_sink(Logger, stderr, warn)
               end, AllLoggers);
         false ->
             ok

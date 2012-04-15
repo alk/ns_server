@@ -50,7 +50,7 @@ spawn_link(Bucket, VBucket, SrcNode, ReplicateIntoNodes, JustBackfillNodes, Afte
                         [fun build_replicas_main/6,
                          [Bucket, VBucket, SrcNode, ReplicateIntoNodes, JustBackfillNodes, AfterDone]]).
 
--define(COMPLETION_POLLING_INTERVAL, 100).
+-define(COMPLETION_POLLING_INTERVAL, 10).
 
 %% @doc works like try/after but when try has raised exception, any
 %% exception from AfterBody is logged and ignored. I.e. when we face
