@@ -23,7 +23,9 @@
 -export([init/1, handle_event/2, handle_call/2,
          handle_info/2, terminate/2, code_change/3]).
 
--record(state, {}).
+-record(state, {
+          old_port_servers_config
+         }).
 
 % Noop process to get initialized in the supervision tree.
 start_link() ->
@@ -32,12 +34,29 @@ start_link() ->
                           end).
 
 init(ignored) ->
-    {ok, #state{}, hibernate}.
+    {ok, #state{}}.
 
-handle_event(_Event, State) ->
-    {value, PortServers} = ns_port_sup:port_servers_config(),
-    ok = reconfig(PortServers),
-    {ok, State, hibernate}.
+handle_event(Event, State) ->
+    case is_interesting_event(Event) of
+        true ->
+            {value, PortServers} = ns_port_sup:port_servers_config(),
+            case State#state.old_port_servers_config =:= PortServers of
+                true ->
+                    {ok, State};
+                false ->
+                    ok = reconfig(PortServers),
+                    {ok, State#state{old_port_servers_config= PortServers}}
+            end;
+        false ->
+            {ok, State}
+    end.
+
+is_interesting_event({port_servers, _}) ->
+    true;
+is_interesting_event({{node, N, port_servers}, _}) when N =:= node() ->
+    true;
+is_interesting_event(_) ->
+    false.
 
 handle_call(unhandled, unhandled) ->
     unhandled.
@@ -51,8 +70,7 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-reconfig(_PortServers) ->
-    {value, PortServers} = ns_port_sup:port_servers_config(),
+reconfig(PortServers) ->
     % CurrPorts looks like...
     %   [{memcached,<0.77.0>,worker,[ns_port_server]}]
     % Or, if the child process went down, then...
