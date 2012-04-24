@@ -148,6 +148,8 @@ handle_call(Msg, From, State) ->
 do_handle_call({raw_eval, Fun}, _From, State) ->
     RV = Fun(State#state.sock, State),
     {reply, RV, State};
+do_handle_call({get_last_closed_checkpoint, VBucketId}, _From, State) ->
+    {reply, mc_client_binary:get_last_closed_checkpoint(State#state.sock, VBucketId), State};
 do_handle_call({raw_stats, SubStat, StatsFun, StatsFunState}, _From, State) ->
     try mc_client_binary:stats(State#state.sock, SubStat, StatsFun, StatsFunState) of
         Reply ->
@@ -381,23 +383,27 @@ connected_buckets(Timeout) ->
                          connected(node(), N, Timeout)
                  end, active_buckets()).
 
+-spec get_last_closed_checkpoint(Bucket::ns_memcached_name(),
+                                 VBucketId::vbucket_id()) -> {ok, integer()} | mc_error().
+get_last_closed_checkpoint(Bucket, VBucketId) ->
+    gen_server:call(server_full(Bucket),
+                    {get_last_closed_checkpoint, VBucketId}, ?TIMEOUT).
+
 %% @doc Send flush command to specified bucket
 -spec flush(ns_memcached_name()) -> ok.
 flush(Bucket) ->
-    gen_server:call({server(Bucket), node()}, flush, ?TIMEOUT).
+    gen_server:call(server_full(Bucket), flush, ?TIMEOUT).
 
 %% @doc Returns true if backfill is running on this node for the given bucket.
--spec backfilling(ns_memcached_name()) ->
-                         boolean().
+-spec backfilling(ns_memcached_name()) -> boolean().
 backfilling(Bucket) ->
-    backfilling(node(), Bucket).
+    gen_server:call(server_full(Bucket), backfilling, ?TIMEOUT).
 
 %% @doc Returns true if backfill is running on the given node for the given
 %% bucket.
--spec backfilling(node(), ns_memcached_name()) ->
-                         boolean().
+-spec backfilling(node(), bucket_name()) -> boolean().
 backfilling(Node, Bucket) ->
-    gen_server:call({server(Bucket), Node}, backfilling, ?TIMEOUT).
+    backfilling({Bucket, Node}).
 
 %% @doc Delete a vbucket. Will set the vbucket to dead state if it
 %% isn't already, blocking until it successfully does so.
@@ -407,14 +413,14 @@ delete_vbucket(Bucket, VBucket) ->
     gen_server:call(server(Bucket), {delete_vbucket, VBucket}, ?TIMEOUT).
 
 
--spec delete_vbucket(node(), ns_memcached_name(), vbucket_id()) ->
+-spec delete_vbucket(node(), bucket_name(), vbucket_id()) ->
                             ok | mc_error().
 delete_vbucket(Node, Bucket, VBucket) ->
     gen_server:call({server(Bucket), Node}, {delete_vbucket, VBucket},
                     ?TIMEOUT).
 
 
--spec get_vbucket(node(), ns_memcached_name(), vbucket_id()) ->
+-spec get_vbucket(node(), bucket_name(), vbucket_id()) ->
                          {ok, vbucket_state()} | mc_error().
 get_vbucket(Node, Bucket, VBucket) ->
     gen_server:call({server(Bucket), Node}, {get_vbucket, VBucket}, ?TIMEOUT).
@@ -444,21 +450,26 @@ host_port_str(Node) ->
 -spec list_vbuckets(ns_memcached_name()) ->
     {ok, [{vbucket_id(), vbucket_state()}]} | mc_error().
 list_vbuckets(Bucket) ->
-    list_vbuckets(node(), Bucket).
+    gen_server:call(server(Bucket), list_vbuckets, ?TIMEOUT).
 
 
--spec list_vbuckets(node(), ns_memcached_name()) ->
+-spec list_vbuckets(node(), bucket_name()) ->
     {ok, [{vbucket_id(), vbucket_state()}]} | mc_error().
 list_vbuckets(Node, Bucket) ->
-    gen_server:call({server(Bucket), Node}, list_vbuckets, ?TIMEOUT).
+    list_vbuckets({Bucket, Node}).
 
--spec list_vbuckets_prevstate(node(), ns_memcached_name()) ->
+-spec list_vbuckets_prevstate(ns_memcached_name()) ->
+    {ok, [{vbucket_id(), vbucket_state()}]} | mc_error().
+list_vbuckets_prevstate(Bucket) ->
+    gen_server:call(server(Bucket), list_vbuckets_prevstate, ?TIMEOUT).
+
+-spec list_vbuckets_prevstate(node(), bucket_name()) ->
     {ok, [{vbucket_id(), vbucket_state()}]} | mc_error().
 list_vbuckets_prevstate(Node, Bucket) ->
-    gen_server:call({server(Bucket), Node}, list_vbuckets_prevstate, ?TIMEOUT).
+    list_vbuckets_prevstate({Bucket, Node}).
 
 
--spec list_vbuckets_multi([node()], ns_memcached_name()) ->
+-spec list_vbuckets_multi([node()], bucket_name()) ->
                                  {[{node(), {ok, [{vbucket_id(),
                                                    vbucket_state()}]}}],
                                   [node()]}.
@@ -480,11 +491,10 @@ set_vbucket(Bucket, VBucket, VBState) ->
     gen_server:call(server(Bucket), {set_vbucket, VBucket, VBState}, ?TIMEOUT).
 
 
--spec set_vbucket(node(), ns_memcached_name(), vbucket_id(), vbucket_state()) ->
+-spec set_vbucket(node(), bucket_name(), vbucket_id(), vbucket_state()) ->
                          ok | mc_error().
 set_vbucket(Node, Bucket, VBucket, VBState) ->
-    gen_server:call({server(Bucket), Node}, {set_vbucket, VBucket, VBState},
-                    ?TIMEOUT).
+    set_vbucket({Bucket, Node}, VBucket, VBState).
 
 
 -spec stats(ns_memcached_name()) ->
@@ -499,7 +509,7 @@ stats(Bucket, Key) ->
     gen_server:call(server(Bucket), {stats, Key}, ?TIMEOUT).
 
 
--spec stats(node(), ns_memcached_name(), binary()) ->
+-spec stats(node(), bucket_name(), binary()) ->
                    {ok, [{binary(), binary()}]} | mc_error().
 stats(Node, Bucket, Key) ->
     gen_server:call({server(Bucket), Node}, {stats, Key}, ?TIMEOUT).
@@ -520,10 +530,14 @@ topkeys(Bucket) ->
     gen_server:call(server(Bucket), topkeys, ?TIMEOUT).
 
 
+-spec raw_stats(ns_memcached_name(), binary(), fun(), any()) -> {ok, any()} | {exception, any()} | {error, any()}.
+raw_stats(Bucket, SubStats, Fn, FnState) ->
+    gen_server:call(server(Bucket),
+                    {raw_stats, SubStats, Fn, FnState}).
+
 -spec raw_stats(node(), ns_memcached_name(), binary(), fun(), any()) -> {ok, any()} | {exception, any()} | {error, any()}.
 raw_stats(Node, Bucket, SubStats, Fn, FnState) ->
-    gen_server:call({ns_memcached:server(Bucket), Node},
-                    {raw_stats, SubStats, Fn, FnState}).
+    raw_stats({Bucket, Node}, SubStats, Fn, FnState).
 
 
 %%
@@ -644,6 +658,12 @@ ensure_bucket_config(Sock, _Bucket, memcached, _MaxSize) ->
                               CD
                       end, not_present),
     ok.
+
+
+server_full({Name, Node}) ->
+    {server(Name), Node};
+server_full(Name) ->
+    server(Name).
 
 
 server(Pid) when is_pid(Pid) ->

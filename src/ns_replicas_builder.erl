@@ -257,7 +257,8 @@ extract_complete_taps(PList, TapNames) ->
 
 observe_wait_all_done(Bucket, VBucket, SrcNode, DstNodes, Sleeper) ->
     TapNames = sets:from_list([iolist_to_binary(tap_name(VBucket, SrcNode, DN)) || DN <- DstNodes]),
-    observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, TapNames, true).
+    observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, TapNames, true),
+    confirm_open_checkpoints(Bucket, VBucket, DstNodes, Sleeper).
 
 observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, TapNames, FirstTime) ->
     case sets:size(TapNames) of
@@ -273,4 +274,33 @@ observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, TapNames, FirstTime) ->
             DoneTaps = extract_complete_taps(PList, TapNames),
             NewTapNames = sets:subtract(TapNames, DoneTaps),
             observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, NewTapNames, false)
+    end.
+
+create_bucket_connection(Config, Bucket, DstNode) ->
+    {Host, Port} = ns_memcached:host_port(DstNode, Config),
+    User = ns_config:search_node_prop(DstNode, Config, memcached, admin_user),
+    Pass = ns_config:search_node_prop(DstNode, Config, memcached, admin_pass),
+    {ok, Pid} = ns_memcached:start_link_manual(Host, Port, User, Pass, Bucket),
+    Pid.
+
+confirm_open_checkpoints(Bucket, VBucket, DstNodes, Sleeper) ->
+    Config = ns_config:get(),
+    Pairs =
+        misc:parallel_map(fun (DNode) ->
+                                  Pid = create_bucket_connection(Config, Bucket, DNode),
+                                  RV = case gen_server:call(Pid, {get_last_closed_checkpoint, VBucket}) of
+                                           {ok, Checkpoint} ->
+                                               Checkpoint;
+                                           _ -> 0
+                                       end,
+                                  {DNode, RV}
+                          end, DstNodes),
+    NotReadyNodes = [N || {N, Checkpoint} <- Pairs,
+                          Checkpoint =:= 0],
+    case NotReadyNodes of
+        [] ->
+            ok;
+        _ ->
+            Sleeper(),
+            confirm_open_checkpoints(Bucket, VBucket, NotReadyNodes, Sleeper)
     end.

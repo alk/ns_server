@@ -20,7 +20,8 @@
 -define(_NS_COMMON__HRL_,).
 
 -type bucket_name() :: nonempty_string().
--type ns_memcached_name() :: bucket_name() | pid().
+-type simple_ns_memcached_name() :: bucket_name() | pid().
+-type ns_memcached_name() :: ns_memcached_name() | {bucket_name(), node()}.
 -type bucket_type() :: memcached | membase.
 -type histogram() :: [{atom(), non_neg_integer()}].
 -type map() :: [[atom(), ...], ...].
