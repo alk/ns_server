@@ -218,6 +218,8 @@ list_buckets(Sock) ->
         Response -> process_error_response(Response)
     end.
 
+-spec get_last_closed_checkpoint(port(), vbucket_id()) -> {ok, non_neg_integer()} |
+                                                          mc_error().
 get_last_closed_checkpoint(Sock, VBucket) ->
     case cmd(?CMD_LAST_CLOSED_CHECKPOINT, Sock, undefined, undefined,
             {#mc_header{vbucket = VBucket},
