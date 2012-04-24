@@ -37,7 +37,7 @@
 -define(CONNECTION_ATTEMPTS, 5).
 
 %% gen_server API
--export([start_link/1]).
+-export([start_link/1, start_link_custom/5]).
 -export([init/1, handle_call/3, handle_cast/2,
          handle_info/2, terminate/2, code_change/3]).
 
@@ -87,12 +87,15 @@ start_link(Bucket) ->
     %% connect.
     gen_server:start_link({local, server(Bucket)}, ?MODULE, Bucket, []).
 
+start_link_custom(Host, Port, User, Pass, Bucket) ->
+    gen_server:start_link(?MODULE, {Host, Port, User, Pass, Bucket}, []).
+
 
 %%
 %% gen_server callback implementation
 %%
 
-init(Bucket) ->
+init(Bucket) when is_list(Bucket) ->
     %% this trap_exit is necessary for terminate callback to work
     process_flag(trap_exit, true),
 
@@ -109,7 +112,23 @@ init(Bucket) ->
                bucket=Bucket}};
         {error, Error} ->
             {stop, Error}
+    end;
+init({Host, Port, User, Pass, Bucket}) ->
+    case connect(Host, Port, User, Pass) of
+        {ok, Sock} ->
+            case mc_client_binary:select_bucket(Sock, Bucket) of
+                ok ->
+                    {ok, #state{
+                       status=manual_connect,
+                       sock = Sock,
+                       bucket = Bucket}};
+                {memcached_error, _, _} = Error ->
+                    {select_bucket_failed, Error}
+            end;
+        {error, Error} ->
+            {stop, Error}
     end.
+
 
 handle_call(Msg, From, State) ->
     StartTS = os:timestamp(),
@@ -263,7 +282,8 @@ handle_info(Msg, State) ->
     ?log_warning("Unexpected handle_info(~p, ~p)", [Msg, State]),
     {noreply, State}.
 
-
+terminate(_Reason, #state{status = manual_connect}) ->
+    ok;
 terminate(Reason, #state{bucket=Bucket, sock=Sock}) ->
     NsConfig = try ns_config:get()
                catch T:E ->
@@ -521,18 +541,29 @@ connect(Tries) ->
     User = ns_config:search_node_prop(Config, memcached, admin_user),
     Pass = ns_config:search_node_prop(Config, memcached, admin_pass),
     try
-        {ok, S} = gen_tcp:connect("127.0.0.1", Port,
-                                  [binary, {packet, 0}, {active, false}]),
-        ok = mc_client_binary:auth(S, {<<"PLAIN">>,
-                                       {list_to_binary(User),
-                                        list_to_binary(Pass)}}),
-        S of
-        Sock -> {ok, Sock}
+        {ok, _} = RV = connect("127.0.0.1", Port, User, Pass),
+        RV
     catch
         E:R ->
             ?log_warning("Unable to connect: ~p, retrying.", [{E, R}]),
             timer:sleep(1000), % Avoid reconnecting too fast.
             connect(Tries - 1)
+    end.
+
+connect(Host, Port, User, Pass) ->
+    case gen_tcp:connect(Host, Port,
+                         [binary, {packet, 0}, {active, false}]) of
+        {ok, S} ->
+            case mc_client_binary:auth(S, {<<"PLAIN">>,
+                                           {list_to_binary(User),
+                                            list_to_binary(Pass)}}) of
+                ok ->
+                    {ok, S};
+                _ -> %% this current fails to provide any details
+                    {error, auth_failed}
+            end;
+        Error ->
+            {connect_failed, Error}
     end.
 
 
@@ -615,6 +646,8 @@ ensure_bucket_config(Sock, _Bucket, memcached, _MaxSize) ->
     ok.
 
 
+server(Pid) when is_pid(Pid) ->
+    Pid;
 server(Bucket) ->
     list_to_atom(?MODULE_STRING ++ "-" ++ Bucket).
 
