@@ -126,6 +126,9 @@ handle_call(Msg, From, State) ->
         end
     end.
 
+do_handle_call({raw_eval, Fun}, _From, State) ->
+    RV = Fun(State#state.sock, State),
+    {reply, RV, State};
 do_handle_call({raw_stats, SubStat, StatsFun, StatsFunState}, _From, State) ->
     try mc_client_binary:stats(State#state.sock, SubStat, StatsFun, StatsFunState) of
         Reply ->
