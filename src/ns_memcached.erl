@@ -519,7 +519,7 @@ connect(Tries) ->
     Pass = ns_config:search_node_prop(Config, memcached, admin_pass),
     try
         {ok, S} = gen_tcp:connect("127.0.0.1", Port,
-                                  [binary, {packet, 0}, {active, false}]),
+                                  [binary, {packet, 0}, {active, false}, {nodelay, true}]),
         ok = mc_client_binary:auth(S, {<<"PLAIN">>,
                                        {list_to_binary(User),
                                         list_to_binary(Pass)}}),

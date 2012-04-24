@@ -82,6 +82,8 @@ build_replicas_main(Bucket, VBucket, SrcNode, ReplicateIntoNodes, JustBackfillNo
         _ -> ok
     end,
 
+    kill_tap_names(Bucket, VBucket, SrcNode, JustBackfillNodes ++ ReplicateIntoNodes),
+
     StopEarlyReplicators = [spawn_replica_builder(Bucket, VBucket, SrcNode, DNode) || DNode <- JustBackfillNodes],
     ContinuousReplicators = [spawn_replica_builder(Bucket, VBucket, SrcNode, DNode) || DNode <- ReplicateIntoNodes],
     Replicators = StopEarlyReplicators ++ ContinuousReplicators,
@@ -257,7 +259,8 @@ extract_complete_taps(PList, TapNames) ->
 
 observe_wait_all_done(Bucket, VBucket, SrcNode, DstNodes, Sleeper) ->
     TapNames = sets:from_list([iolist_to_binary(tap_name(VBucket, SrcNode, DN)) || DN <- DstNodes]),
-    observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, TapNames, true).
+    observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, TapNames, true),
+    wait_ack_log_size_change(Bucket, SrcNode, Sleeper, TapNames).
 
 observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, TapNames, FirstTime) ->
     case sets:size(TapNames) of
@@ -274,3 +277,38 @@ observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, TapNames, FirstTime) ->
             NewTapNames = sets:subtract(TapNames, DoneTaps),
             observe_wait_all_done_tail(Bucket, SrcNode, Sleeper, NewTapNames, false)
     end.
+
+grab_ack_log_size_pairs(Bucket, SrcNode, TapNamesList) ->
+    {ok, PList} = ns_memcached:stats(SrcNode, Bucket, <<"tap">>),
+    Dict = dict:from_list(PList),
+    [begin
+         {ok, BinValue} = dict:find(<<"eq_tapq:replication_", Name/binary, ":ack_log_size">>, Dict),
+         Value = list_to_integer(binary_to_list(BinValue)),
+         {Name, Value}
+     end || Name <- TapNamesList].
+
+wait_ack_log_size_change(Bucket, SrcNode, Sleeper, TapNames) ->
+    Pairs = grab_ack_log_size_pairs(Bucket, SrcNode, sets:to_list(TapNames)),
+    %% ack_log_size = 0 pairs are done
+    %%
+    %% ack_log_size > 1 pairs are clearly past open_checkpoint message
+    %% because nothing is sent before open_checkpoint is confirmed.
+    TapNamesLeft = [Name || {Name, Value} <- Pairs,
+                            Value =:= 1],
+    wait_ack_log_size_change_loop(Bucket, SrcNode, Sleeper, TapNamesLeft).
+
+wait_ack_log_size_change_loop(_Bucket, _SrcNode, _Sleeper, []) ->
+    ok;
+wait_ack_log_size_change_loop(Bucket, SrcNode, Sleeper, TapNamesLeft) ->
+    Sleeper(),
+    NewPairs = grab_ack_log_size_pairs(Bucket, SrcNode, TapNamesLeft),
+    %% we assume that ack_log_size = 1 will soon change and when that
+    %% happens we're pretty sure we're past open_checkpoint message
+    %% confirmation. Because ack_log_size = 1 was either indication of
+    %% in-flight open_checkpoint message or indication of data being
+    %% sent. In later case we'll confirm unacked stuff soon (in case 1
+    %% in-flight mutation was last one) or send more (if there are
+    %% more mutations to be sent).
+    NewTapNamesLeft = [Name || {Name, Value} <- NewPairs,
+                               Value =:= 1],
+    wait_ack_log_size_change_loop(Bucket, SrcNode, Sleeper, NewTapNamesLeft).
