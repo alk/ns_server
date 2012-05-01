@@ -37,8 +37,8 @@ function buildDocURL(base, docId/*, ..args */) {
   return buildURL.apply(null, args);
 }
 
-function buildViewPseudoLink(bucketName, ddoc, type, viewName) {
-  return encodeURIComponent(_.map([bucketName, ddoc._id, type, viewName], encodeURIComponent).join("/"));
+function buildViewPseudoLink(bucketName, ddoc, viewName) {
+  return encodeURIComponent(_.map([bucketName, ddoc._id, viewName], encodeURIComponent).join("/"));
 }
 
 function unbuildViewPseudoLink(link, body, context) {
@@ -335,13 +335,11 @@ var ViewsSection = {
             rv += '</optgroup><optgroup label="Production Views" class="topgroup">';
             productionOptgroupOutput = true;
           }
-          rv += '<optgroup label="' + escapeHTML(doc._id) + '" class="childgroup">';
+          rv += "<optgroup label='" + escapeHTML(doc._id) + "' class='childgroup'>";
           _.each(viewNames, function (name) {
-            var maybeSelected = (selectedDDocId === doc._id &&
-              selectedViewName === name) ? ' selected' : '';
-            rv += '<option value="' +
-              escapeHTML(buildViewPseudoLink(bucketName, doc, '_view', name)) +
-              '"' + maybeSelected + ">" +
+            var maybeSelected = (selectedDDocId === doc._id && selectedViewName === name) ? ' selected' : '';
+            rv += "<option value='" + escapeHTML(buildViewPseudoLink(bucketName, doc, name)) + "'" +
+              maybeSelected + ">" +
               escapeHTML(name) + "</option>";
           });
           rv += "</optgroup>";
@@ -360,7 +358,7 @@ var ViewsSection = {
             self.rawViewNameCell.setValue(undefined);
             return;
           }
-          unbuildViewPseudoLink(newValue, function (_ignored, ddocId, type, viewName) {
+          unbuildViewPseudoLink(newValue, function (_ignored, ddocId, viewName) {
             var devMode = isDevModeDoc({_id: ddocId});
             _.defer(function () {
               $('#views_view_select').parent().find('.selectBox-label')
@@ -767,7 +765,7 @@ var ViewsSection = {
         var rv = _.map(ddocs, function (doc) {
           var rv = _.clone(doc);
           var viewInfos = _.map(rv.views || {}, function (value, key) {
-            var plink = buildViewPseudoLink(bucketName, doc, '_view', key);
+            var plink = buildViewPseudoLink(bucketName, doc, key);
             return _.extend({name: key,
                              viewLink: '#showView=' + plink,
                              removeLink: '#removeView=' + plink
@@ -1266,7 +1264,7 @@ var ViewsSection = {
   startRemoveView: function (pseudoLink) {
     return unbuildViewPseudoLink(pseudoLink, this.doStartRemoveView, this);
   },
-  doStartRemoveView: function (bucketName, ddocId, type, viewName) {
+  doStartRemoveView: function (bucketName, ddocId, viewName) {
     var self = this;
     self.withBucketAndDDoc(bucketName, ddocId, function (ddocURL, ddoc) {
       genericDialog({text: "Deleting this view will result in the index" +
@@ -1434,7 +1432,7 @@ var ViewsSection = {
       ViewsFilter.initFilterFor(buildDocURL(dbURL, ddocId, "_view", viewName));
     });
   },
-  doShowView: function (bucketName, ddocId, type, viewName) {
+  doShowView: function (bucketName, ddocId, viewName) {
     var self = this;
     self.withBucketAndDDoc(bucketName, ddocId, function (ddocURL, ddoc) {
       if (!ddoc) {
