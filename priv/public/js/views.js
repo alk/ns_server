@@ -60,6 +60,318 @@ couchGet = Cell.wrapWithArgsResolving(couchGet);
 // same for couchReq, below
 couchReq = Cell.wrapWithArgsResolving(couchReq);
 
+
+function createViewsCells(ns, modeCell, capiBaseCell, bucketsListCell, filterParamsCell) {
+  _.each(["modeTabs",
+          "subsetTabCell",
+          "rawViewsBucketCell",
+          "rawDDocIdCell",
+          "rawViewNameCell",
+          "pageNumberCell",
+          "fullSubsetPageNumberCell"], function (name) {
+            if (!(name in ns))
+              BUG("need defined: " + name);
+          });
+
+  ns.viewsBucketCell = Cell.compute(function (v) {
+    var selected = v(ns.rawViewsBucketCell);
+    if (selected) {
+      return selected;
+    }
+    var buckets = v.need(bucketsListCell).byType.membase;
+    var bucketInfo = _.detect(buckets, function (info) {return info.name === "default"}) || buckets[0];
+    if (!bucketInfo) {
+      return null;
+    }
+    return bucketInfo.name;
+  });
+  // NOTE: we're using null as a marker of "known" lack of any
+  // value. Thus equality is === (instead of default ==)
+  ns.viewsBucketCell.equality = function (a, b) {return a === b;};
+
+
+  ns.haveBucketsCell = Cell.compute(function (v) {
+    return v.need(ns.viewsBucketCell) !== null;
+  });
+
+  ns.selectedBucketCell = Cell.compute(function (v) {
+    if (v.need(modeCell) != 'views')
+      return;
+    return v.need(ns.viewsBucketCell);
+  }).name("selectedBucket");
+
+  // this contains url to current bucket "database"
+  ns.dbURLCell = Cell.compute(function (v) {
+    var base = v.need(capiBaseCell);
+    var bucketName = v.need(ns.selectedBucketCell);
+
+    if (bucketName) {
+      return buildURL(base, bucketName) + "/";
+    } else {
+      return;
+    }
+  });
+
+  // this contains url of _all_docs with query params filtering only
+  // design docs of current bucket
+  ns.allDDocsURLCell = Cell.compute(function (v) {
+    return buildURL(v.need(ns.dbURLCell), "_all_docs", {
+      startkey: JSON.stringify("_design/"),
+      endkey: JSON.stringify("_design0"),
+      include_docs: "true"
+    });
+  }).name("allDDocsURL");
+
+  // this contains result of fetching _all_docs query for design docs of
+  // current bucket
+  ns.rawAllDDocsCell = Cell.compute(function (v) {
+    return future.get({url: v.need(ns.allDDocsURLCell)});
+  }).name("rawAllDDocs");
+
+  // this contains list of design docs of current bucket
+  ns.allDDocsCell = Cell.compute(function (v) {
+    var haveBuckets = v.need(ns.haveBucketsCell);
+
+    if (haveBuckets) {
+      return _.map(v.need(ns.rawAllDDocsCell).rows, function (r) {return r.doc});
+    } else {
+      return [];
+    }
+  }).name("allDDocs");
+  ns.allDDocsCell.delegateInvalidationMethods(ns.rawAllDDocsCell);
+
+  // this contains [] if not inside some particular view and otherwise pair
+  // [ddoc, current-view-name]
+  // TODO (alk): consider adding Cell suffix
+  ns.currentDDocAndView = Cell.computeEager(function (v) {
+    var allDDocs = v.need(ns.allDDocsCell);
+    var ddocId = v(ns.rawDDocIdCell);
+    var viewName = v(ns.rawViewNameCell);
+    if (!ddocId || !viewName) {
+      return [];
+    }
+    var ddoc = _.detect(allDDocs, function (d) {return d._id === ddocId});
+    if (!ddoc) {
+      return [];
+    }
+    var view = (ddoc.views || {})[viewName];
+    if (!view) {
+      return [];
+    }
+    return [ddoc, viewName];
+  }).name("currentDDocAndView");
+
+  // this is json of current view if inside view
+  ns.currentView = Cell.compute(function (v) {
+    return (function (ddoc, viewName) {
+      if (viewName === undefined) {
+        return;
+      }
+      return (ddoc.views || {})[viewName];
+    }).apply(this, v.need(ns.currentDDocAndView));
+  }).name("currentView");
+
+  function mkIntPageCell(pageNumberCell) {
+    return Cell.compute(function (v) {
+      var pageVal = v(pageNumberCell);
+      var pageNo = parseInt(pageVal, 10);
+      if (isNaN(pageNo) || pageNo < 1) {
+        pageNo = 1;
+      }
+      if (pageNo > 10) {
+        pageNo = 10;
+      }
+      return pageNo;
+    })
+  }
+
+  // this contains integer value of dev or productions page number
+  // cell (TODO (alk): double check)
+  ns.intPageCell = mkIntPageCell(ns.pageNumberCell);
+  // this contains integer value of dev "full subset"
+  ns.intFullSubsetPageCell = mkIntPageCell(ns.fullSubsetPageNumberCell);
+
+  ns.operatePageNumber = function (body) {
+    var cells = [ns.intPageCell, ns.pageNumberCell];
+    if (ns.subsetTabCell.value === "prod") {
+      cells = [ns.intFullSubsetPageCell, ns.fullSubsetPageNumberCell];
+    }
+    cells[0].getValue(function (intPage) {
+      body(intPage, cells[1]);
+    });
+  }
+
+  ns.activateNextPage = function () {
+    ns.operatePageNumber(function (intPage, cell) {
+      if (intPage > 1) {
+        cell.setValue((intPage-1).toString());
+      }
+    });
+  }
+
+  ns.activatePrevPage = function () {
+    ns.operatePageNumber(function (intPage, cell) {
+      if (intPage < 10) {
+        cell.setValue((intPage+1).toString());
+      }
+    });
+  }
+
+  // this contains function that accepts page number &
+  // production/normal subset and builds query result url NOTE:
+  // _function_ depends on pageNo and subset. Things like current
+  // bucket, current ddoc, view and filter are parameters of cell. So
+  // changing any of them will produce different function.
+  //
+  // This has subtle (and carefully engineered) effect on back button
+  // behavior and on handling of filter & current view changes.
+  //
+  // The idea is that user needs to specifically run some combination
+  // of bucket, ddoc, view and filter and changing any of those need
+  // to reset result set and not automatically re-run query.
+  //
+  // But if only page number is changed it's desired to automatically
+  // re-run query and refresh results
+  ns.proposedURLBuilderCell = Cell.compute(function (v) {
+    if (!v(ns.currentView)) {
+      return;
+    }
+    var dbURL = v.need(ns.dbURLCell);
+    var ddocAndView = v.need(ns.currentDDocAndView);
+    if (!ddocAndView[1]) {
+      return;
+    }
+    var filterParams = v.need(filterParamsCell);
+    return function (pageNo, subset) {
+      var initial = {};
+      if (subset === "prod") {
+        initial.full_set = 'true'
+      }
+      return buildDocURL(dbURL, ddocAndView[0]._id, "_view", ddocAndView[1], _.extend(initial, filterParams, {
+        limit: ViewsSection.PAGE_LIMIT.toString(),
+        skip: String((pageNo - 1) * 10)
+      }));
+    }
+  }).name("proposedURLBuilderCell");
+
+  // contains "applied" (i.e. run by user) url builder for default
+  // subset
+  ns.defaultSubsetAppliedURLBuilderCell = new Cell();
+  // contains "applied" (i.e. run by user) url builder for full subset
+  ns.fullSubsetAppliedURLBuilderCell = new Cell();
+  // contains "applied" (i.e. run by user) url builder for any subset
+  ns.lastAppliedURLBuilderCell = new Cell();
+
+  // contains "effective" default subset results url. Will be
+  // undefined if current proposedURLBuilderCell is different that
+  // last applied default subset builder. proposedURLBuilderCell value
+  // being function will always change it's "identity" on any change
+  // of it's dependent value. Which means any change of them will
+  // reset this to undefined.
+  ns.defaultSubsetResultsURLCell = Cell.compute(function (v) {
+    var appliedBuilder = v(ns.defaultSubsetAppliedURLBuilderCell);
+    var proposedBuilder = v.need(ns.proposedURLBuilderCell);
+    if (appliedBuilder !== proposedBuilder) {
+      return;
+    }
+    return appliedBuilder(v.need(intPageCell), "dev");
+  });
+  // contains "effective" full subset results url. Will be undefined
+  // if current proposedURLBuilderCell is different that last applied
+  // full subset builder. proposedURLBuilderCell value being function
+  // will always change it's "identity" on any change of it's
+  // dependent value. Which means any change of them will reset this
+  // to undefined.
+  ns.fullSubsetResultsURLCell = Cell.compute(function (v) {
+    var appliedBuilder = v(ns.fullSubsetAppliedURLBuilderCell);
+    var proposedBuilder = v.need(ns.proposedURLBuilderCell);
+    if (appliedBuilder !== proposedBuilder) {
+      return;
+    }
+    return appliedBuilder(v.need(ns.intFullSubsetPageCell), "prod");
+  });
+  // picks either defaultSubsetResultsURLCell or
+  // fullSubsetResultsURLCell depending on which subset is choosen.
+  ns.viewResultsURLCell = Cell.compute(function (v) {
+    if (v.need(ns.subsetTabCell) === "prod") {
+      return v.need(ns.fullSubsetResultsURLCell);
+    }
+    return v.need(ns.defaultSubsetResultsURLCell);
+  });
+
+  // "Runs" current combination of bucket, design doc, view and filter
+  //
+  // Note this is changing value of either
+  // fullSubsetAppliedURLBuilderCell or
+  // defaultSubsetAppliedURLBuilderCell.
+  //
+  // The idea is that it should be possible to apply both tabs and see
+  // switch between them without re-running query. I found any other
+  // behavior I've considered too confusing.
+  ns.viewResultsURLCell.runView = function () {
+    var urlCell = ns.defaultSubsetResultsURLCell;
+    var appliedBuilderCell = ns.defaultSubsetAppliedURLBuilderCell;
+    if (ns.subsetTabCell.value === "prod") {
+      urlCell = ns.fullSubsetResultsURLCell;
+      appliedBuilderCell = ns.fullSubsetAppliedURLBuilderCell;
+    }
+
+    // we reset url cell
+    urlCell.setValue(undefined);
+    Cell.waitQuiescence(function () {
+      // then wait until all changes propagate and read proposedURLBuilderCell
+      ns.proposedURLBuilderCell.getValue(function (value) {
+        // which value we copy to appliedBuilderCell
+        appliedBuilderCell.setValue(value);
+        ns.lastAppliedURLBuilderCell.setValue(value);
+        // and then recalculate urlCell setting it's "true" value
+        urlCell.recalculate();
+      });
+    });
+  };
+
+  // this implements the following behavior: if bucket, design doc,
+  // view or filter change: ...
+  ns.proposedURLBuilderCell.subscribeValue(function (proposed) {
+    if (proposed !== ns.lastAppliedURLBuilderCell.value) {
+      //  we're resetting subset to default
+      ns.subsetTabCell.setValue("dev");
+      // reset current page numbers
+      ns.pageNumberCell.setValue(undefined);
+      ns.fullSubsetPageNumberCell.setValue(undefined);
+      // and reset all applied builders which leads all "effective"
+      // urls to become undefined
+      ns.lastAppliedURLBuilderCell.setValue(undefined);
+      ns.defaultSubsetAppliedURLBuilderCell.setValue(undefined);
+      ns.fullSubsetAppliedURLBuilderCell.setValue(undefined);
+    }
+  });
+
+  // this contains results of default subset query (if default subset
+  // url is defined)
+  ns.defaultSubsetViewResultsCell = Cell.compute(function (v) {
+    return future.capiViewGet({url: v.need(ns.defaultSubsetResultsURLCell),
+                               timeout: 3600000});
+  }).name("defaultSubsetViewResultsCell")
+
+  // this contains results of default subset query (if full subset
+  // url is defined)
+  ns.fullSubsetViewResultsCell = Cell.compute(function (v) {
+    return future.capiViewGet({url: v.need(ns.fullSubsetResultsURLCell),
+                               timeout: 3600000});
+  }).name("fullSubsetViewResultsCell")
+
+  // this picks between subsets to display
+  ns.viewResultsCell = Cell.compute(function (v) {
+    // NOTE: we're requiring both subsets values, because otherwise
+    // cells would deactivate 'other' results cell as not needed
+    // anymore.
+    var fullResults = v(ns.fullSubsetViewResultsCell);
+    var defaultResults = v(ns.defaultSubsetViewResultsCell);
+    return v.need(ns.subsetTabCell) === 'prod' ? fullResults : defaultResults;
+  }).name("viewResultsCell");
+}
+
 function couchReq(method, url, data, success, error) {
   var postData = {
     type: method,
@@ -199,20 +511,11 @@ var ViewsSection = {
     self.pageNumberCell = new StringHashFragmentCell("viewPage");
     self.fullSubsetPageNumberCell = new StringHashFragmentCell("fullSubsetViewPage");
 
-    self.viewsBucketCell = Cell.compute(function (v) {
-      var selected = v(self.rawViewsBucketCell);
-      if (selected) {
-        return selected;
-      }
-      var buckets = v.need(DAL.cells.bucketsListCell).byType.membase;
-      var bucketInfo = _.detect(buckets, function (info) {return info.name === "default"}) || buckets[0];
-      if (!bucketInfo) {
-        return null;
-      }
-      return bucketInfo.name;
-    });
-    self.viewsBucketCell.equality = function (a, b) {return a === b;};
+    createViewsCells(self,
+                     DAL.cells.mode, DAL.cells.capiBase,
+                     DAL.cells.bucketsListCell, ViewsFilter.filterParamsCell);
 
+    // this fragment handles current bucket select
     (function () {
       var cell = Cell.compute(function (v) {
         var mode = v.need(DAL.cells.mode);
@@ -232,30 +535,10 @@ var ViewsSection = {
       });
     })();
 
-    var haveBucketsCell = Cell.compute(
-      function (v) {
-        return v.need(self.viewsBucketCell) !== null;
-      });
-
-    var selectedBucketCell = self.selectedBucketCell = Cell.compute(function (v) {
-      if (v.need(DAL.cells.mode) != 'views')
-        return;
-      return v.need(self.viewsBucketCell);
-    }).name("selectedBucket");
-
-    var dbURLCell = self.dbURLCell = Cell.compute(function (v) {
-      var base = v.need(DAL.cells.capiBase);
-      var bucketName = v.need(selectedBucketCell);
-
-      if (bucketName) {
-        return buildURL(base, bucketName) + "/";
-      } else {
-        return;
-      }
-    });
-
+    // fragment handles disabling of 'Create Development View' button
+    // and binds it's click to #startCreateView
     (function (createBtn) {
-      dbURLCell.subscribeValue(function (value) {
+      self.dbURLCell.subscribeValue(function (value) {
         createBtn.toggleClass('disabled', !value);
       });
       createBtn.bind('click', function (e) {
@@ -264,47 +547,8 @@ var ViewsSection = {
       });
     })(views.find('.btn_create'));
 
-    var allDDocsURLCell = Cell.compute(function (v) {
-      return buildURL(v.need(dbURLCell), "_all_docs", {
-        startkey: JSON.stringify("_design/"),
-        endkey: JSON.stringify("_design0"),
-        include_docs: "true"
-      });
-    }).name("allDDocsURL");
-
-    var rawAllDDocsCell = Cell.compute(function (v) {
-      return future.get({url: v.need(allDDocsURLCell)});
-    }).name("rawAllDDocs");
-
-    var allDDocsCell = self.allDDocsCell = Cell.compute(function (v) {
-      var haveBuckets = v.need(haveBucketsCell);
-
-      if (haveBuckets) {
-        return _.map(v.need(rawAllDDocsCell).rows, function (r) {return r.doc});
-      } else {
-        return [];
-      }
-    }).name("allDDocs");
-    allDDocsCell.delegateInvalidationMethods(rawAllDDocsCell);
-
-    var currentDDocAndView = self.currentDDocAndView = Cell.computeEager(function (v) {
-      var allDDocs = v.need(allDDocsCell);
-      var ddocId = v(self.rawDDocIdCell);
-      var viewName = v(self.rawViewNameCell);
-      if (!ddocId || !viewName) {
-        return [];
-      }
-      var ddoc = _.detect(allDDocs, function (d) {return d._id === ddocId});
-      if (!ddoc) {
-        return [];
-      }
-      var view = (ddoc.views || {})[viewName];
-      if (!view) {
-        return [];
-      }
-      return [ddoc, viewName];
-    }).name("currentDDocAndView");
-
+    // this fragment renders current ddoc/view select and handles
+    // changing of currently selected pair
     (function () {
       var cell = Cell.compute(function (v) {
         var mode = v.need(DAL.cells.mode);
@@ -314,10 +558,10 @@ var ViewsSection = {
 
         var bucketName = v.need(self.viewsBucketCell);
 
-        var ddocs = _.sortBy(v.need(allDDocsCell), function(ddoc) {
+        var ddocs = _.sortBy(v.need(self.allDDocsCell), function(ddoc) {
           return !isDevModeDoc(ddoc);
         });
-        var ddocAndView = v.need(currentDDocAndView);
+        var ddocAndView = v.need(self.currentDDocAndView);
 
         var selectedDDocId = ddocAndView.length && ddocAndView[0]._id;
         var selectedViewName = ddocAndView.length && ddocAndView[1];
@@ -332,6 +576,7 @@ var ViewsSection = {
             rv += '<optgroup label="Development Views" class="topgroup">';
             devOptgroupOutput = true;
           } else if (!isDevModeDoc(doc) && !productionOptgroupOutput) {
+            // TODO (alk): that /optgroup is just wrong here
             rv += '</optgroup><optgroup label="Production Views" class="topgroup">';
             productionOptgroupOutput = true;
           }
@@ -385,7 +630,9 @@ var ViewsSection = {
       });
     })();
 
-    DAL.subscribeWhenSection(currentDDocAndView, "views", function (value) {
+    // TODO (alk) consider killing currentDDocAndView which looks a
+    // bit excessively complex
+    DAL.subscribeWhenSection(self.currentDDocAndView, "views", function (value) {
       $('#views_spinner')[value ? 'hide' : 'show']();
       $('#views_list')[(value && !value.length) ? 'show' : 'hide']();
       $('#viewcode')[(value && value.length) ? 'show' : 'hide']();
@@ -397,51 +644,6 @@ var ViewsSection = {
         self.reduceEditor.refresh();
       }
     });
-
-    var currentView = self.currentView = Cell.compute(function (v) {
-      return (function (ddoc, viewName) {
-        if (viewName === undefined) {
-          return;
-        }
-        return (ddoc.views || {})[viewName];
-      }).apply(this, v.need(currentDDocAndView));
-    }).name("currentView");
-
-    (function () {
-
-      var originalMap, originalReduce;
-
-      currentView.subscribeValue(function (view) {
-
-        $('#views .when-inside-view')[view ? 'show' : 'hide']();
-        if (view === undefined) {
-          return;
-        }
-
-        originalMap = view.map;
-        originalReduce = view.reduce || "";
-
-        // NOTE: this triggers onChange right now so it needs to be last
-        self.mapEditor.setValue(view.map);
-        self.reduceEditor.setValue(view.reduce || "");
-      });
-
-      var unchangedCell = new Cell();
-
-      var onMapReduceChange = function () {
-        var nowMap = self.mapEditor.getValue();
-        var nowReduce = self.reduceEditor.getValue();
-        var unchanged = (originalMap === nowMap && originalReduce === nowReduce);
-        unchangedCell.setValue(unchanged);
-      }
-
-      self.mapEditor.setOption('onChange', onMapReduceChange);
-      self.reduceEditor.setOption('onChange', onMapReduceChange);
-      unchangedCell.subscribeValue(function (unchanged) {
-        $('.run_button').toggleClass('disabled', !unchanged);
-      });
-
-    })();
 
     function enableEditor(editor) {
       editor.setOption('readOnly', false);
@@ -459,167 +661,67 @@ var ViewsSection = {
         .closest('.shadow_box').removeClass('editing');
     }
 
-    var editingDevView = Cell.compute(function (v) {
-      var ddoc = v.need(currentDDocAndView)[0];
-      if (!ddoc) {
-        return false;
-      }
-      return !!ddoc._id.match(/^_design\/dev_/);
-    }).name("editingDevView");
-
-    editingDevView.subscribeValue(function (devView) {
-
-      $('#save_view_as, #just_save_view')[devView ? "show" : "hide"]();
-
-      if (!devView) {
-        disableEditor(self.mapEditor);
-        disableEditor(self.reduceEditor);
-      } else {
-        enableEditor(self.mapEditor);
-        enableEditor(self.reduceEditor);
-      }
-    });
-
-    function mkIntPageCell(pageNumberCell) {
-      return Cell.compute(function (v) {
-        var pageVal = v(pageNumberCell);
-        var pageNo = parseInt(pageVal, 10);
-        if (isNaN(pageNo) || pageNo < 1) {
-          pageNo = 1;
-        }
-        if (pageNo > 10) {
-          pageNo = 10;
-        }
-        return pageNo;
-      })
-    }
-
-    var intPageCell = mkIntPageCell(self.pageNumberCell);
-    var intFullSubsetPageCell = mkIntPageCell(self.fullSubsetPageNumberCell);
-
-    var viewResultsURLCell;
-    var defaultSubsetResultsURLCell;
-    var fullSubsetResultsURLCell;
-
+    // this fragment of code handles displaying current view's map and
+    // reduce function bodies to editors and disabling run button of
+    // any of those bodies are changed from original value
     (function () {
-      var proposedURLBuilderCell = Cell.compute(function (v) {
-        if (!v(self.currentView)) {
+      var originalMap, originalReduce;
+
+      var justDDocCell = Cell.compute(function (v) {
+        return v.need(self.currentDDocAndView)[0];
+      });
+
+      Cell.subscribeMultipleValues(function (ddoc, view) {
+        $('#views .when-inside-view')[view ? 'show' : 'hide']();
+        if (view === undefined) {
           return;
         }
-        var dbURL = v.need(self.dbURLCell);
-        var ddocAndView = v.need(self.currentDDocAndView);
-        if (!ddocAndView[1]) {
-          return;
+        if (!ddoc) {
+          BUG();
         }
-        var filterParams = v.need(ViewsFilter.filterParamsCell);
-        return function (pageNo, subset) {
-          var initial = {};
-          if (subset === "prod") {
-            initial.full_set = 'true'
+
+        originalMap = view.map;
+        originalReduce = view.reduce || "";
+
+        var devView = !!ddoc._id.match(/^_design\/dev_/);
+          $('#save_view_as, #just_save_view')[devView ? "show" : "hide"]();
+
+        // NOTE: this triggers onChange right now so it needs to be
+        // after setting original{Map,Reduce}
+        self.mapEditor.setValue(view.map);
+        self.reduceEditor.setValue(view.reduce || "");
+
+        // this may potentially depend on editor being actually shown. So defer a bit
+        _.defer(function () {
+          if (!devView) {
+            disableEditor(self.mapEditor);
+            disableEditor(self.reduceEditor);
+          } else {
+            enableEditor(self.mapEditor);
+            enableEditor(self.reduceEditor);
           }
-          return buildDocURL(dbURL, ddocAndView[0]._id, "_view", ddocAndView[1], _.extend(initial, filterParams, {
-            limit: ViewsSection.PAGE_LIMIT.toString(),
-            skip: String((pageNo - 1) * 10)
-          }));
-        }
-      }).name("proposedURLBuilderCell");
-
-      DAL.subscribeWhenSection(Cell.compute(function (v) {
-        var subset = v.need(self.subsetTabCell);
-        var intPage = subset === 'prod' ? v.need(intFullSubsetPageCell) : v.need(intPageCell);
-        return [v(proposedURLBuilderCell), intPage, subset];
-      }), "views", function (args) {
-        if (!args) {
-          return;
-        }
-        (function (builder, intPage, subset) {
-          var html="";
-          if (builder) {
-            var url = builder(intPage, subset);
-            var text = url.substring(url.indexOf('?'));
-            html = "<a href='" + escapeHTML(url) + "'>" + escapeHTML(decodeURIComponent(text)) + '</a>';
-          }
-          $('.view_query_string').html(html);
-        }).apply(this, args);
-      });
-
-      var defaultSubsetAppliedURLBuilderCell = new Cell();
-      var fullSubsetAppliedURLBuilderCell = new Cell();
-      var lastAppliedURLBuilderCell = new Cell();
-
-      defaultSubsetResultsURLCell = Cell.compute(function (v) {
-        var appliedBuilder = v(defaultSubsetAppliedURLBuilderCell);
-        var proposedBuilder = v.need(proposedURLBuilderCell);
-        if (appliedBuilder !== proposedBuilder) {
-          return;
-        }
-        return appliedBuilder(v.need(intPageCell), "dev");
-      });
-      fullSubsetResultsURLCell = Cell.compute(function (v) {
-        var appliedBuilder = v(fullSubsetAppliedURLBuilderCell);
-        var proposedBuilder = v.need(proposedURLBuilderCell);
-        if (appliedBuilder !== proposedBuilder) {
-          return;
-        }
-        return appliedBuilder(v.need(intFullSubsetPageCell), "prod");
-      });
-      self.viewResultsURLCell = viewResultsURLCell = Cell.compute(function (v) {
-        if (v.need(self.subsetTabCell) === "prod") {
-          return v.need(fullSubsetResultsURLCell);
-        }
-        return v.need(defaultSubsetResultsURLCell);
-      });
-
-      viewResultsURLCell.runView = function () {
-        var urlCell = defaultSubsetResultsURLCell;
-        var appliedBuilderCell = defaultSubsetAppliedURLBuilderCell;
-        if (self.subsetTabCell.value === "prod") {
-          urlCell = fullSubsetResultsURLCell;
-          appliedBuilderCell = fullSubsetAppliedURLBuilderCell;
-        }
-
-        urlCell.setValue(undefined);
-        Cell.waitQuiescence(function () {
-          proposedURLBuilderCell.getValue(function (value) {
-            appliedBuilderCell.setValue(value);
-            lastAppliedURLBuilderCell.setValue(value);
-            urlCell.recalculate();
-          });
         });
-      };
+      }, justDDocCell, self.currentView);
 
-      proposedURLBuilderCell.subscribeValue(function (proposed) {
-        if (proposed !== lastAppliedURLBuilderCell.value) {
-          self.subsetTabCell.setValue("dev");
-          self.pageNumberCell.setValue(undefined);
-          self.fullSubsetPageNumberCell.setValue(undefined);
-          lastAppliedURLBuilderCell.setValue(undefined);
-          defaultSubsetAppliedURLBuilderCell.setValue(undefined);
-          fullSubsetAppliedURLBuilderCell.setValue(undefined);
-        }
+
+      var unchangedCell = new Cell();
+
+      var onMapReduceChange = function () {
+        var nowMap = self.mapEditor.getValue();
+        var nowReduce = self.reduceEditor.getValue();
+        var unchanged = (originalMap === nowMap && originalReduce === nowReduce);
+        unchangedCell.setValue(unchanged);
+      }
+
+      self.mapEditor.setOption('onChange', onMapReduceChange);
+      self.reduceEditor.setOption('onChange', onMapReduceChange);
+      unchangedCell.subscribeValue(function (unchanged) {
+        $('.run_button').toggleClass('disabled', !unchanged);
       });
     })();
 
-    var defaultSubsetViewResultsCell = Cell.compute(function (v) {
-      return future.capiViewGet({url: v.need(defaultSubsetResultsURLCell),
-                                 timeout: 3600000});
-    }).name("defaultSubsetViewResultsCell")
-
-    var fullSubsetViewResultsCell = Cell.compute(function (v) {
-      return future.capiViewGet({url: v.need(fullSubsetResultsURLCell),
-                                 timeout: 3600000});
-    }).name("fullSubsetViewResultsCell")
-
-    var viewResultsCell = Cell.compute(function (v) {
-      // NOTE: we're requiring both subsets values, because otherwise
-      // cells would deactivate 'other' results cell as not needed
-      // anymore.
-      var fullResults = v(fullSubsetViewResultsCell);
-      var defaultResults = v(defaultSubsetViewResultsCell);
-      return v.need(self.subsetTabCell) === 'prod' ? fullResults : defaultResults;
-    }).name("viewResultsCell");
-
-    viewResultsCell.subscribeValue(function (value) {
+    // this handles rendering of current view results
+    self.viewResultsCell.subscribeValue(function (value) {
       if (value) {
         var rows = _.filter(value.rows, function (r) {return ('key' in r)});
         var targ = {rows: rows};
@@ -635,13 +737,17 @@ var ViewsSection = {
       renderTemplate('view_results', targ);
     });
 
+    // this code fragment binds next/prev buttons to corresponding
+    // actions and handles disabling enabling buttons
+    //
+    // TODO: move disabling/enabling logic into model
     (function () {
       var prevBtn = $('#views .results_block .arr_prev');
       var nextBtn = $('#views .results_block .arr_next');
 
       DAL.subscribeWhenSection(Cell.compute(function (v) {
-        var intCell = v.need(self.subsetTabCell) === 'prod' ? intFullSubsetPageCell : intPageCell;
-        return [v(viewResultsCell), v.need(intCell)];
+        var intCell = v.need(self.subsetTabCell) === 'prod' ? self.intFullSubsetPageCell : self.intPageCell;
+        return [v(self.viewResultsCell), v.need(intCell)];
       }), "views", function (args) {
         if (!args) {
           return;
@@ -657,45 +763,30 @@ var ViewsSection = {
         }).apply(this, args);
       });
 
-      function pageBtnClicker(btn, body) {
-        btn.click(function (ev) {
+      function withHandlingDisabledness(body) {
+        return function (ev) {
           ev.preventDefault();
-          if (btn.hasClass('disabled')) {
+          if ($(this).hasClass('disabled')) {
             return;
           }
-          var cells = [intPageCell, self.pageNumberCell];
-          if (self.subsetTabCell.value === "prod") {
-            cells = [intFullSubsetPageCell, self.fullSubsetPageNumberCell];
-          }
-          cells[0].getValue(function (intPage) {
-            body(intPage, cells[1]);
-          });
-        });
+          return body.call(this, ev);
+        }
       }
 
-      pageBtnClicker(prevBtn, function (intPage, cell) {
-        if (intPage > 1) {
-          cell.setValue((intPage-1).toString());
-        }
-      });
-
-      pageBtnClicker(nextBtn, function (intPage, cell) {
-        if (intPage < 10) {
-          cell.setValue((intPage+1).toString());
-        }
-      });
+      nextBtn.click(withHandlingDisabledness(self.activateNextPage));
+      prevBtn.click(withHandlingDisabledness(self.activatePrevPage));
     })();
 
     Cell.subscribeMultipleValues(function (url, results) {
       $('#view_results_container')[(url && !results) ? 'hide' : 'show']();
       $('#view_results_spinner')[(url && !results) ? 'show' : 'hide']();
-    }, viewResultsURLCell, viewResultsCell);
+    }, self.viewResultsURLCell, self.viewResultsCell);
 
     $('#save_view_as').bind('click', $m(self, 'startViewSaveAs'));
     $('#just_save_view').bind('click', $m(self, 'saveView'));
 
     var productionDDocsCell = Cell.compute(function (v) {
-      var allDDocs = v.need(allDDocsCell);
+      var allDDocs = v.need(self.allDDocsCell);
       return _.select(allDDocs, function (ddoc) {
         return !isDevModeDoc(ddoc);
       });
@@ -712,7 +803,7 @@ var ViewsSection = {
     });
 
     var devDDocsCell = Cell.compute(function (v) {
-      var allDDocs = v.need(allDDocsCell);
+      var allDDocs = v.need(self.allDDocsCell);
       return _.select(allDDocs, function (ddoc) {
         return isDevModeDoc(ddoc);
       });
@@ -725,7 +816,7 @@ var ViewsSection = {
     // This also filters out non-view related tasks
     var tasksOfCurrentBucket = Cell.compute(function (v) {
       var tasks = v.need(DAL.cells.tasksProgressCell);
-      var bucketName = v.need(selectedBucketCell);
+      var bucketName = v.need(self.selectedBucketCell);
       var rv = {};
       _.each(tasks, function (taskInfo) {
         if (taskInfo.type !== 'indexer' && taskInfo.type !== 'view_compaction') {
@@ -761,7 +852,7 @@ var ViewsSection = {
     function mkViewsListCell(ddocsCell, containerId) {
       var cell = Cell.needing(tasksOfCurrentBucket, ddocsCell, DAL.cells.currentPoolDetailsCell)
         .compute(function (v, tasks, ddocs, poolDetails) {
-        var bucketName = v.need(selectedBucketCell);
+        var bucketName = v.need(self.selectedBucketCell);
         var rv = _.map(ddocs, function (doc) {
           var rv = _.clone(doc);
           var viewInfos = _.map(rv.views || {}, function (value, key) {
