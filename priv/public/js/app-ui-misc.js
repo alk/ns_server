@@ -184,7 +184,14 @@
       latestOnChangeVal = undefined;
       buildOptions(q, selected, args.list);
       applyWidget(q.bind('change', onChange));
-      q.next('input').val(q.children(':selected').text());
+
+      var input = q.next('input');
+      if (args.selected === null) {
+        input.val('bucket does not exist');
+        input.css('color', '#C00')
+      } else {
+        input.val(q.children(':selected').text());
+      }
     });
 
     q.data('listCellBinding', {
