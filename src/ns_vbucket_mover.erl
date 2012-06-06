@@ -214,8 +214,11 @@ map_to_array(Map) ->
 %% @private
 %% @doc {Src, Dst} pairs from a chain with unmapped nodes filtered out.
 pairs(Chain) ->
-    [Pair || {Src, Dst} = Pair <- misc:pairs(Chain), Src /= undefined,
-             Dst /= undefined].
+    [{Src, Dst}
+     || [Src | Replicas] <- [Chain],
+        Src /= undefined,
+        Dst <- Replicas,
+        Dst /= undefined].
 
 
 %% @private

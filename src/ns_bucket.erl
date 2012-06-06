@@ -291,15 +291,11 @@ failover_warnings() ->
 
 
 map_to_replicas(Map) ->
-    map_to_replicas(Map, 0, []).
-
-map_to_replicas([], _, Replicas) ->
-    lists:append(Replicas);
-map_to_replicas([Chain|Rest], V, Replicas) ->
-    Pairs = [{Src, Dst, V}||{Src, Dst} <- misc:pairs(Chain),
-                            Src /= undefined andalso Dst /= undefined],
-    map_to_replicas(Rest, V+1, [Pairs|Replicas]).
-
+    [{Src, Dst, V}
+     || {V, [Src | Replicas]} <- misc:enumerate(Map, 0),
+        Src =/= undefined,
+        Dst <- Replicas,
+        Dst =/= undefined].
 
 %% @doc Return the minimum number of live copies for all vbuckets.
 -spec min_live_copies([node()], list()) -> non_neg_integer() | undefined.

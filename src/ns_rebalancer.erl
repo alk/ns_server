@@ -343,7 +343,11 @@ verify_replication(Bucket, Nodes, Map) ->
         lists:sort(
           lists:flatmap(
             fun ({V, Chain}) ->
-                    [{Src, Dst, V} || {Src, Dst} <- misc:pairs(Chain), Src =/= undefined, Dst =/= undefined]
+                    [{Src, Dst, V}
+                     || [Src | Replicas] = _TheChain <- [Chain],
+                        Src =/= undefined,
+                        Dst <- Replicas,
+                        Dst =/= undefined]
             end, misc:enumerate(Map, 0))),
     ActualReplicators =
         lists:sort(ns_vbm_sup:replicators(Nodes, Bucket)),
