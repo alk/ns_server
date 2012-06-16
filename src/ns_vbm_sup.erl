@@ -326,41 +326,51 @@ local_change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node=DstNode} = Chil
               fun () ->
                       ns_process_registry:register_pid(vbucket_filter_changes_registry, RegistryId, self()),
                       ?log_debug("Registered myself under id:~p", [Args]),
-                      {ok, NewDownstream} = ebucketmigrator_srv:start_vbucket_filter_change(ThePid),
-                      erlang:process_flag(trap_exit, true),
-                      ok = supervisor:terminate_child(Server, ChildId),
-                      ok = supervisor:delete_child(Server, ChildId),
-                      Me = self(),
-                      proc_lib:spawn_link(
-                        fun () ->
-                                {ok, Pid} = supervisor:start_child(Server, NewChildSpec),
-                                Me ! {done, Pid}
-                        end),
-                      Loop = fun (Loop, SentAlready) ->
-                                     receive
-                                         {'EXIT', _From, _Reason} = ExitMsg ->
-                                             ?log_error("Got unexpected exit signal in vbucket change txn body: ~p", [ExitMsg]),
-                                             exit({txn_crashed, ExitMsg});
-                                         {done, RV} ->
-                                             {ok, RV};
-                                         {'$gen_call', {Pid, _} = From, get_downstream} ->
-                                             case SentAlready of
-                                                 false ->
-                                                     gen_tcp:controlling_process(NewDownstream, Pid),
-                                                     gen_server:reply(From, {ok, NewDownstream});
-                                                 true ->
-                                                     gen_server:reply(From, refused)
-                                             end,
-                                             Loop(Loop, true)
-                                     end
-                             end,
-                      Loop(Loop, false)
+                      case ebucketmigrator_srv:start_vbucket_filter_change(ThePid, Args) of
+                          {ok, NewDownstream} ->
+                              erlang:process_flag(trap_exit, true),
+                              ok = supervisor:terminate_child(Server, ChildId),
+                              ok = supervisor:delete_child(Server, ChildId),
+                              Me = self(),
+                              proc_lib:spawn_link(
+                                fun () ->
+                                        {ok, Pid} = supervisor:start_child(Server, NewChildSpec),
+                                        Me ! {done, Pid}
+                                end),
+                              Loop =
+                                  fun (Loop, SentAlready) ->
+                                          receive
+                                              {'EXIT', _From, _Reason} = ExitMsg ->
+                                                  ?log_error("Got unexpected exit signal in vbucket change txn body: ~p", [ExitMsg]),
+                                                  exit({txn_crashed, ExitMsg});
+                                              {done, RV} ->
+                                                  {ok, RV};
+                                              {'$gen_call', {Pid, _} = From, get_downstream} ->
+                                                  case SentAlready of
+                                                      false ->
+                                                          gen_tcp:controlling_process(NewDownstream, Pid),
+                                                          gen_server:reply(From, {ok, NewDownstream});
+                                                      true ->
+                                                          gen_server:reply(From, refused)
+                                                  end,
+                                                  Loop(Loop, true)
+                                          end
+                                  end,
+                              Loop(Loop, false);
+                          incompatible_options ->
+                              {ok, do_old_style_vbucket_filter_change(Bucket, SrcNode, ChildId, NewVBuckets)}
+                      end
               end);
         [] ->
             no_child
     end.
 
-change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node = DstNode} = ChildId, NewVBuckets) ->
+do_old_style_vbucket_filter_change(Bucket, SrcNode, #child_id{dest_node = DstNode} = ChildId, NewVBuckets) ->
+    system_stats_collector:increment_counter(old_style_vbucket_filter_changes, 1),
+    kill_child(SrcNode, Bucket, ChildId),
+    start_child(SrcNode, Bucket, NewVBuckets, DstNode).
+
+change_vbucket_filter(Bucket, SrcNode, ChildId, NewVBuckets) ->
     HaveChangeFilterKey = rpc:async_call(SrcNode, ns_vbm_sup, have_local_change_vbucket_filter, []),
     ChangeFilterRV = rpc:call(SrcNode, ns_vbm_sup, local_change_vbucket_filter,
                               [Bucket, SrcNode, ChildId, NewVBuckets]),
@@ -374,9 +384,7 @@ change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node = DstNode} = ChildId,
                 true ->
                     erlang:error({change_filter_failed, Error});
                 {badrpc, {'EXIT', {undef, _}}} ->
-                    system_stats_collector:increment_counter(old_style_vbucket_filter_changes, 1),
-                    kill_child(SrcNode, Bucket, ChildId),
-                    start_child(SrcNode, Bucket, NewVBuckets, DstNode)
+                    do_old_style_vbucket_filter_change(Bucket, SrcNode, ChildId, NewVBuckets)
             end
     end.
 

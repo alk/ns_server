@@ -46,7 +46,7 @@
                }).
 
 %% external API
--export([start_link/3, start_link/4, start_vbucket_filter_change/1]).
+-export([start_link/3, start_link/4, start_vbucket_filter_change/2]).
 
 -include("mc_constants.hrl").
 -include("mc_entry.hrl").
@@ -83,19 +83,41 @@ started_vbucket_filter_loop(State, MRef) ->
              end,
     {stop, Reason, State}.
 
+normalize_options_for_compatibility(Options) ->
+    lists:foldl(fun (Key, Acc) ->
+                        lists:keydelete(Key, 1, Acc)
+                end, Options, [passed_downstream_retriever, vbuckets]).
 
-handle_call(start_vbucket_filter_change, From, #state{args={_, Dst, Opts}} = State) ->
-    Username = proplists:get_value(username, Opts),
-    Password = proplists:get_value(password, Opts, ""),
-    Bucket = proplists:get_value(bucket, Opts),
-    try connect(Dst, Username, Password, Bucket) of
-        NewDownstream ->
-            continue_start_vbucket_filter_change(From, State, NewDownstream)
-    catch T:E ->
-            Stack = erlang:get_stacktrace(),
-            Tuple = {T, E, Stack},
-            ?log_info("Failed to establish new downstream connection:~n~p", [Tuple]),
-            {reply, {failed, Tuple}, State}
+is_args_compatible(OldArgs, NewArgs) ->
+    {OldSrc, OldDst, OldOpts} = OldArgs,
+    case NewArgs of
+        {OldSrc, OldDst, NewOpts} ->
+            SanitizedNew = normalize_options_for_compatibility(NewOpts),
+            SanitizedOld = normalize_options_for_compatibility(OldOpts),
+            SanitizedNew =:= SanitizedOld;
+        _ ->
+            false
+    end.
+
+handle_call({start_vbucket_filter_change, NewArgs}, From, #state{args={_, Dst, Opts} = OldArgs} = State) ->
+    case is_args_compatible(OldArgs, NewArgs) of
+        true ->
+            Username = proplists:get_value(username, Opts),
+            Password = proplists:get_value(password, Opts, ""),
+            Bucket = proplists:get_value(bucket, Opts),
+            try connect(Dst, Username, Password, Bucket) of
+                NewDownstream ->
+                    continue_start_vbucket_filter_change(From, State, NewDownstream)
+            catch T:E ->
+                    Stack = erlang:get_stacktrace(),
+                    Tuple = {T, E, Stack},
+                    ?log_info("Failed to establish new downstream connection:~n~p", [Tuple]),
+                    {reply, {failed, Tuple}, State}
+            end;
+        false ->
+            ?log_info("Unable to proceed with quick vbucket filter change due to incompatible args:~n~p~n~p~n", [OldArgs, NewArgs]),
+            (catch system_stats_collector:increment_counter(vbucket_filter_change_incompatible_options, 1)),
+            {reply, incompatible_options, State}
     end;
 
 handle_call(_Req, _From, State) ->
@@ -370,9 +392,9 @@ start_link(Node, Src, Dst, Opts) ->
     misc:start_link(Node, ?MODULE, init, [{Src, Dst, Opts}]).
 
 
--spec start_vbucket_filter_change(pid()) -> {ok, port()} | {failed, any()}.
-start_vbucket_filter_change(Pid) ->
-    gen_server:call(Pid, start_vbucket_filter_change, 30000).
+-spec start_vbucket_filter_change(pid(), any()) -> {ok, port()} | {failed, any()} | incompatible_options.
+start_vbucket_filter_change(Pid, NewArgs) ->
+    gen_server:call(Pid, {start_vbucket_filter_change, NewArgs}, 30000).
 
 
 %%
