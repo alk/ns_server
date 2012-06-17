@@ -325,10 +325,10 @@ do_confirm_sent_messages(Sock, Seqno) ->
     case read_tap_message(Sock) of
         {ok, Packet} ->
             <<_Magic:8, _Opcode:8, _KeyLen:16, _ExtLen:8, _DataType: 8,
-              _VBucket:16, _BodyLen:32, Opaque:32, _CAS:64, _Rest/binary>> = Packet,
+              Status:16, _BodyLen:32, Opaque:32, _CAS:64, _Rest/binary>> = Packet,
             case Opaque of
                 Seqno ->
-                    ?rebalance_info("Got close ack!~n", []),
+                    ?rebalance_info("Got close ack! Status:~p", [Status]),
                     ok;
                 _ ->
                     do_confirm_sent_messages(Sock, Seqno)
@@ -339,8 +339,20 @@ do_confirm_sent_messages(Sock, Seqno) ->
             Crap
     end.
 
+%% purpose of this function is make sure everything that was sent to
+%% downstream is processed (not necessarily successfully). This is
+%% used to make sure there's no concurrent incoming mutations for any
+%% vbucket, which otherwise would be impossible to do (i.e. we
+%% abruptly shutdown replicator and stuff that was sent is still in
+%% flight and gets processed in parallel with new replicator causing
+%% troubles)
 confirm_sent_messages(State) ->
-    Seqno = State#state.last_sent_seqno + 1,
+    %% pick "impossible" seqno that's much behind currently used one
+    %%
+    %% we want (<current seqno> - 2**16) mod 2**32, but rem of negative
+    %% value will be negative, thus we need some more elaborate
+    %% computation
+    Seqno = (State#state.last_sent_seqno + (16#ffffffff - 16#10000 + 1)) rem 16#100000000,
     Sock = State#state.downstream,
     inet:setopts(Sock, [{active, false}, {nodelay, true}]),
     Msg = mc_binary:encode(req, #mc_header{opcode = ?TAP_OPAQUE, opaque = Seqno},
