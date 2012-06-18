@@ -290,17 +290,17 @@ server(Bucket) ->
 have_local_change_vbucket_filter() ->
     true.
 
-mk_downstream_retriever(Id) ->
+mk_old_state_retriever(Id) ->
     %% this function's closure will be kept in supervisor, so I want
     %% it to reference as few stuff as possible thus separate closure maker
     fun () ->
             case ns_process_registry:lookup_pid(vbucket_filter_changes_registry, Id) of
                 missing -> undefined;
                 TxnPid ->
-                    case (catch gen_server:call(TxnPid, get_downstream, infinity)) of
-                        {ok, Downstream} ->
+                    case (catch gen_server:call(TxnPid, get_old_state, infinity)) of
+                        {ok, OldState} ->
                             ?log_info("Got vbucket filter change downstream. Proceeding vbucket filter change operation"),
-                            Downstream;
+                            OldState;
                         TxnCrap ->
                             ?log_info("Getting downstream for vbucket change operation failed:~n~p", [TxnCrap]),
                             undefined
@@ -312,7 +312,7 @@ local_change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node=DstNode} = Chil
     Server = server(Bucket),
     RegistryId = {SrcNode, Bucket, NewVBuckets, DstNode},
     Args = args(SrcNode, Bucket, NewVBuckets, DstNode, false,
-                [{passed_downstream_retriever, mk_downstream_retriever(RegistryId)}]),
+                [{old_state_retriever, mk_old_state_retriever(RegistryId)}]),
     Childs = supervisor:which_children(Server),
     MaybeThePid = [Pid || {Id, Pid, _, _} <- Childs,
                           Id =:= ChildId],
@@ -326,7 +326,7 @@ local_change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node=DstNode} = Chil
               fun () ->
                       ns_process_registry:register_pid(vbucket_filter_changes_registry, RegistryId, self()),
                       ?log_debug("Registered myself under id:~p", [Args]),
-                      {ok, NewDownstream} = ebucketmigrator_srv:start_vbucket_filter_change(ThePid),
+                      {ok, OldState} = ebucketmigrator_srv:start_vbucket_filter_change(ThePid),
                       erlang:process_flag(trap_exit, true),
                       ok = supervisor:terminate_child(Server, ChildId),
                       ok = supervisor:delete_child(Server, ChildId),
@@ -343,11 +343,11 @@ local_change_vbucket_filter(Bucket, SrcNode, #child_id{dest_node=DstNode} = Chil
                                              exit({txn_crashed, ExitMsg});
                                          {done, RV} ->
                                              {ok, RV};
-                                         {'$gen_call', {Pid, _} = From, get_downstream} ->
+                                         {'$gen_call', {Pid, _} = From, get_old_state} ->
                                              case SentAlready of
                                                  false ->
-                                                     gen_tcp:controlling_process(NewDownstream, Pid),
-                                                     gen_server:reply(From, {ok, NewDownstream});
+                                                     ebucketmigrator_srv:pass_sockets_to(Pid, OldState),
+                                                     gen_server:reply(From, {ok, OldState});
                                                  true ->
                                                      gen_server:reply(From, refused)
                                              end,

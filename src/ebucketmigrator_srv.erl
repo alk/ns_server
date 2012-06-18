@@ -58,45 +58,72 @@
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-continue_start_vbucket_filter_change({Pid, _} = From, State, NewDownstream) ->
-    MRef = erlang:monitor(process, Pid),
-    case confirm_sent_messages(State) of
-        ok ->
-            gen_tcp:close(State#state.downstream),
-            gen_tcp:controlling_process(NewDownstream, Pid),
-            gen_server:reply(From, {ok, NewDownstream}),
-            started_vbucket_filter_loop(State, MRef);
-        _ ->
-            gen_tcp:close(NewDownstream),
-            {stop, old_downstream_failed, old_downstream_failed, State}
+start_vbucket_filter_change_eat_msg_loop(State) ->
+    receive
+        Msg ->
+            State2 = start_vbucket_filter_change_handle_loop(Msg, State),
+            start_vbucket_filter_change_eat_msg_loop(State2)
+    after 0 ->
+            State
     end.
 
-started_vbucket_filter_loop(State, MRef) ->
-    master_activity_events:note_vbucket_filter_change_started(),
-    Reason = receive
-                 {'EXIT', _From, Reason0} = ExitMsg ->
-                     ?log_debug("Got exit signal in vbucket filter changing loop:~p", [ExitMsg]),
-                     Reason0;
-                 {'DOWN', MRef, _, _, Reason0} = DownMsg ->
-                     ?log_error("Got DOWN from vbucket filter change txn owner:~p", [DownMsg]),
-                     {vbucket_txn_abort, Reason0}
-             end,
-    {stop, Reason, State}.
+queue_data(State, Element, Data) ->
+    OldBuffer = erlang:element(Element, State)
+    erlang:setelement(Element, State, <<OldBuffer/binary, Data/binary>>).
+
+start_vbucket_filter_change_handle_loop(
+  {tcp, Socket, Data}, #state{downstream=Downstream,
+                              upstream=Upstream} = State) ->
+    queue_data(State, case Socket of
+                          Downstream ->
+                              State#state.downbuf;
+                          Upstream ->
+                              State#state.upbuf
+                      end, Data);
+start_vbucket_filter_change_handle_loop({tcp_closed, Socket}, State) ->
+    erlang:exit({connect_close_during_vbucket_filter_change,
+                 case State#state.downstream =:= Socket of
+                     true -> downstream;
+                     false -> upstream
+                 end});
+start_vbucket_filter_change_handle_loop({check_for_timeout, _}, State) ->
+    ?log_debug("Ignoring check_for_timeout in the middle of vbucket filter change"),
+    State;
+start_vbucket_filter_change_handle_loop(retry_not_ready_vbuckets, State) ->
+    ?log_debug("Ignoring retry_not_ready_vbuckets in the middle of vbucket filter change"),
+    State;
+start_vbucket_filter_change_handle_loop({'EXIT', _Pid, Reason} = ExitMsg, State) ->
+    ?rebalance_error("killing myself due to exit message: ~p", [ExitMsg]),
+    erlang:exit(Reason);
+start_vbucket_filter_change_handle_loop({system, _, _} = SysMsg, State) ->
+    ?log_info("Got erlang system message that I'll drop on the floor. I'll be dead soon anyways"),
+    State.
 
 
-handle_call(start_vbucket_filter_change, From, #state{args={_, Dst, Opts}} = State) ->
-    Username = proplists:get_value(username, Opts),
-    Password = proplists:get_value(password, Opts, ""),
-    Bucket = proplists:get_value(bucket, Opts),
-    try connect(Dst, Username, Password, Bucket) of
-        NewDownstream ->
-            continue_start_vbucket_filter_change(From, State, NewDownstream)
-    catch T:E ->
-            Stack = erlang:get_stacktrace(),
-            Tuple = {T, E, Stack},
-            ?log_info("Failed to establish new downstream connection:~n~p", [Tuple]),
-            {reply, {failed, Tuple}, State}
-    end;
+handle_call(start_vbucket_filter_change,
+            {Pid, _} = From,
+            #state{upstream = Upstream,
+                   downstream = Downstream} = State) ->
+    %% ok so first lets disable socket's active flags
+    ok = inet:setopts(Downstream, [{active, false}]),
+    ok = inet:setopts(Upstream, [{active, false}]),
+    ?log_debug("Got start vbucket filter change. Proceeding with reading unread binaries"),
+    %% now we need to process pending messages
+    State2 = start_vbucket_filter_change_eat_msg_loop(State),
+    ?log_debug("Going to confirm reception downstream messages"),
+    {ok, ConfirmTRef} = timer:kill_after(?TERMINATE_TIMEOUT),
+    {confirm_sent_messages, ok} = {confirm_sent_messages, confirm_sent_messages(State2)},
+    timer:cancel(ConfirmTRef),
+    gen_server:call(State#state.upstream_sender, silence_upstream),
+    ?log_debug("Confirmed upstream messages are feeded to kernel"),
+    ok = gen_tcp:controlling_process(Upstream, Pid),
+    ok = gen_tcp:controlling_process(Downstream, Pid),
+    ?log_debug("Passed upstream and downstream to caller"),
+    gen_server:reply(From, {ok, State2}),
+    ?log_debug("Sent out state. Preparing to die"),
+    erlang:process_flag(trap_exit, false),
+    erlang:hibernate(erlang, exit, [normal]).
+
 
 handle_call(_Req, _From, State) ->
     {reply, unhandled, State}.
@@ -281,6 +308,9 @@ init({Src, Dst, Opts}=InitArgs) ->
 
 upstream_sender_loop(Upstream) ->
     receive
+        {'$gen_call', From, silence_upstream} ->
+            gen_server:reply(From, ok),
+            erlang:hibernate(erlang, exit, [silenced]),
         Data ->
             ok = gen_tcp:send(Upstream, Data)
     end,
