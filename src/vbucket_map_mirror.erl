@@ -37,7 +37,9 @@
 %% implies 'badness' cannot happen.
 -module(vbucket_map_mirror).
 
--export([start_link/0, node_vbuckets_dict/1, node_to_inner_capi_base_url/1, submit_full_reset/0]).
+-export([start_link/0, node_vbuckets_dict/1,
+         node_to_inner_capi_base_url/1, submit_full_reset/0,
+         node_to_capi_base_url/2]).
 
 start_link() ->
     work_queue:start_link(vbucket_map_mirror, fun mirror_init/0).
@@ -129,10 +131,21 @@ call_compute_node_base_url(Node) ->
     work_queue:submit_sync_work(
       vbucket_map_mirror,
       fun () ->
-              case capi_utils:capi_url(Node, "", "127.0.0.1") of
-                  undefined -> ok;
-                  URL ->
-                      ets:insert(vbucket_map_mirror, {Node, iolist_to_binary(URL)})
+              case capi_utils:compute_capi_port(Node) of
+                  undefined ->
+                      ets:insert(vbucket_map_mirror, {Node, undefined, false}),
+                      undefined;
+                  Port ->
+                      case misc:node_name_host(Node) of
+                          {_, "127.0.0.1" = H} ->
+                              U = iolist_to_binary([<<"http://">>, H, $:, integer_to_list(Port)]),
+                              ets:insert(vbucket_map_mirror, {Node, U, Port}),
+                              U;
+                          {_Name, H} ->
+                              U = iolist_to_binary([<<"http://">>, H, $:, integer_to_list(Port)]),
+                              ets:insert(vbucket_map_mirror, {Node, U, false}),
+                              U
+                      end
               end
       end).
 
@@ -145,6 +158,18 @@ node_to_inner_capi_base_url(Node) ->
         [] ->
             call_compute_node_base_url(Node),
             node_to_inner_capi_base_url(Node);
-        [{_, URL}] ->
+        [{_, URL, _}] ->
             URL
+    end.
+
+-spec node_to_capi_base_url(node(), iolist() | binary()) -> undefined | binary().
+node_to_capi_base_url(Node, LocalAddr) ->
+    case ets:lookup(vbucket_map_mirror, Node) of
+        [] ->
+            call_compute_node_base_url(Node),
+            node_to_capi_base_url(Node, LocalAddr);
+        [{_, URL, false}] ->
+            URL;
+        [{_, _URL, Port}] ->
+            iolist_to_binary([<<"http://">>, LocalAddr, $:, integer_to_list(Port)])
     end.

@@ -1025,10 +1025,10 @@ build_nodes_info_fun(IncludeOtp, InfoLevel, LocalAddr) ->
                   end,
             KV3 = case Bucket of
                       undefined ->
-                          case capi_utils:capi_url(WantENode, "/", LocalAddr, Config) of
+                          case capi_utils:capi_url_bin(WantENode, <<"/">>, LocalAddr) of
                               undefined -> KV2;
                               CapiURL ->
-                                  [{couchApiBase, list_to_binary(CapiURL)}
+                                  [{couchApiBase, CapiURL}
                                    | KV2]
                           end;
                       _ ->
@@ -1039,10 +1039,10 @@ build_nodes_info_fun(IncludeOtp, InfoLevel, LocalAddr) ->
                                                                                                          WantENode, NodeStatuses)
                                         end,
                           KVRep = [{replication, Replication} | KV2],
-                          case capi_utils:capi_bucket_url(WantENode, Bucket, LocalAddr, Config) of
+                          case capi_utils:capi_bucket_url_bin(WantENode, Bucket, LocalAddr) of
                               undefined -> KVRep;
                               CapiBucketUrl ->
-                                  [{couchApiBase, list_to_binary(CapiBucketUrl)}
+                                  [{couchApiBase, CapiBucketUrl}
                                    | KVRep]
                           end
                   end,
