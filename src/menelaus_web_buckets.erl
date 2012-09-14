@@ -123,7 +123,14 @@ build_bucket_node_infos(BucketName, BucketConfig, InfoLevel, LocalAddr, IncludeO
     %% Only list nodes this bucket is mapped to
     F = menelaus_web:build_nodes_info_fun(IncludeOtp, InfoLevel, LocalAddr),
     misc:randomize(),
-    [F(N, BucketName) || N <- misc:shuffle(proplists:get_value(servers, BucketConfig, []))].
+    Nodes = proplists:get_value(servers, BucketConfig, []),
+    %% NOTE: there's potential inconsistency here between BucketConfig
+    %% and (potentially more up-to-date) vbuckets dict. Given that
+    %% nodes list is mostly informational I find it ok.
+    Dict = vbucket_map_mirror:node_vbuckets_dict(BucketName),
+    GoodNodes = [N || N <- Nodes,
+                      dict:find(Dict, N) =/= error],
+    [F(N, BucketName) || N <- misc:shuffle(GoodNodes)].
 
 build_bucket_info(PoolId, Id, Bucket, LocalAddr) ->
     build_bucket_info(PoolId, Id, Bucket, normal, LocalAddr).
