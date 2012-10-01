@@ -82,10 +82,15 @@ function createDocumentsCells(ns, modeCell, capiBaseCell, bucketsListCell) {
     return null;
   }).name("currentDocumentIdCell");
 
+  ns.selectedBucketCRUDBaseCell = Cell.compute(function (v) {
+    var currentBucket = v.need(ns.selectedBucketCell);
+    return buildURL("/pools/default/buckets/", currentBucket, "docs");
+  });
+
   ns.currentDocURLCell = Cell.compute(function (v) {
     var currentDocId = v(ns.currentDocumentIdCell);
     if (currentDocId) {
-      return buildDocURL(v.need(ns.dbURLCell), currentDocId);
+      return buildURL(v.need(ns.selectedBucketCRUDBaseCell) + "/", currentDocId);
     }
   }).name("currentDocURLCell");
 
@@ -111,11 +116,7 @@ function createDocumentsCells(ns, modeCell, capiBaseCell, bucketsListCell) {
       },
       success: function (doc, status, xhr) {
         if (doc) {
-          var meta = xhr.getResponseHeader("X-Couchbase-Meta");
-          dataCallback({
-            json : doc,
-            meta : JSON.parse(meta)
-          });
+          dataCallback(doc);
         } else {
           var error = new Error(status);
           error.explanatoryMessage = documentErrors.notExist;
@@ -138,7 +139,6 @@ function createDocumentsCells(ns, modeCell, capiBaseCell, bucketsListCell) {
       return error;
     }
   }).name("currentDocCell");
-
   ns.currentDocCell.delegateInvalidationMethods(ns.rawCurrentDocCell);
 
   //documents list
@@ -151,7 +151,6 @@ function createDocumentsCells(ns, modeCell, capiBaseCell, bucketsListCell) {
     var page = v.need(ns.currentDocumentsPageNumberCell);
     var limit = v(ns.currentPageLimitCell);
     var skip = page * limit;
-    var url = v.need(ns.dbURLCell);
 
     param.skip = String(skip);
     param.include_docs = true;
@@ -165,7 +164,7 @@ function createDocumentsCells(ns, modeCell, capiBaseCell, bucketsListCell) {
       param.endkey = JSON.stringify(param.endkey);
     }
 
-    return buildURL(url, "_all_docs", param);
+    return buildURL(v.need(ns.selectedBucketCRUDBaseCell), param);
   }).name("currentPageDocsURLCell");
 
   ns.currentPageDocsCell = Cell.compute(function (v) {
@@ -175,15 +174,6 @@ function createDocumentsCells(ns, modeCell, capiBaseCell, bucketsListCell) {
       return {rows: []};
     }
   }).name("currentPageDocsCell");
-
-  ns.dbURLCell = Cell.compute(function (v) {
-    var base = v.need(capiBaseCell);
-    var bucketName = v.need(ns.selectedBucketCell);
-
-    if (bucketName) {
-      return buildURL(base, bucketName) + "/";
-    }
-  }).name("dbURLCell");
 
   ns.currentPageLimitCell = Cell.compute(function (v) {
     var pageLimit = v(ns.pageLimitCell);
@@ -618,21 +608,6 @@ var DocumentsSection = {
     (function () {
       var modal;
       var spinner;
-      var dbURL;
-      var currentDocUrl;
-      var currentDocId;
-
-      self.dbURLCell.subscribeValue(function (url) {;
-        dbURL = url;
-      });
-
-      self.currentDocURLCell.subscribeValue(function (url) {
-        currentDocUrl = url;
-      });
-
-      self.currentDocumentIdCell.subscribeValue(function (id) {
-        currentDocId = id;
-      });
 
       function startSpinner(dialog) {
         modal = new ModalAction();
@@ -644,32 +619,49 @@ var DocumentsSection = {
         spinner.remove();
       }
 
-      function checkOnExistence(checkId, checkDoc) {
-        var newUrl = buildDocURL(dbURL, checkId);
+      function tryCreatingDoc(docId, docJSON) {
+        var newUrl = buildURL(self.selectedBucketCRUDBaseCell.value + "/", docId);
 
-        couchReq("GET", newUrl, null,
-          function (doc) {
-            stopSpinner();
-            if (doc) {
-              createDocWarning.text(documentErrors.alreadyExists).show();
-            }
-          },
-          function (error) {
-            couchReq("PUT", newUrl, checkDoc, function () {
-              stopSpinner();
-              hideDialog(createDocDialog);
-              self.documentIdCell.setValue(checkId);
-            }, function (error, num, unexpected) {
-              stopSpinner();
-              if (error.reason) {
-                createDocWarning.text(error.reason).show();
-              } else {
-                unexpected();
-              }
-              self.currentPageDocsURLCell.recalculate();
-            });
+        couchReq("GET", newUrl, null, onGETSuccess, onGETError);
+        return;
+
+        function onGETSuccess(doc) {
+          stopSpinner();
+          createDocWarning.text(documentErrors.alreadyExists).show();
+        }
+
+        function onGETError(error, status, unexpected) {
+          if (status >= 400 && status < 500) {
+            doCreateDoc();
+            return;
           }
-        );
+          stopSpinner();
+          if (error.reason) {
+            createDocWarning.text(error.reason).show();
+          } else {
+            unexpected();
+          }
+        }
+
+        function doCreateDoc() {
+          couchReq("POST", newUrl, docJSON, onPOSTSuccess, onPOSTError);
+        }
+
+        function onPOSTSuccess() {
+          stopSpinner();
+          hideDialog(createDocDialog);
+          self.documentIdCell.setValue(docId);
+        }
+
+        function onPOSTError(error, status, unexpected) {
+          stopSpinner();
+          if (error.reason) {
+            createDocWarning.text(error.reason).show();
+          } else {
+            unexpected();
+          }
+          self.currentPageDocsURLCell.recalculate();
+        }
       }
 
       docCreateBtn.click(function (e) {
@@ -684,7 +676,7 @@ var DocumentsSection = {
               startSpinner(createDocDialog);
               var preDefinedDoc = {"click":"to edit",
                 "new in 2.0":"there are no reserved field names"};
-              checkOnExistence(val, preDefinedDoc);
+              tryCreatingDoc(val, preDefinedDoc);
             } else {
               createDocWarning.text(documentErrors.idEmpty).show();
             }
@@ -704,7 +696,7 @@ var DocumentsSection = {
               var val = $.trim(createDocInput.val());
               if (val) {
                 startSpinner(createDocDialog);
-                checkOnExistence(val, json);
+                tryCreatingDoc(val, json);
               } else {
                 createDocWarning.text(documentErrors.idEmpty).show();
               }
@@ -722,12 +714,10 @@ var DocumentsSection = {
         if (json) {
           enableSaveBtn(false);
           showDocumentPendingState(true);
-          couchReq('PUT', currentDocUrl, json, function () {
-            couchReq("GET", currentDocUrl, undefined, function (doc) {
-              showDocumentPendingState(false);
-              tryShowJson(doc);
-            });
-          }, function (error, num, unexpected) {
+          couchReq('POST', self.currentDocURLCell.value, json, function () {
+            self.currentDocCell.setValue(undefined);
+            self.currentDocCell.invalidate();
+          }, function (error, status, unexpected) {
             showDocumentPendingState(false);
             if (error.reason) {
               editingNotice.text(error.reason).show();
@@ -744,7 +734,7 @@ var DocumentsSection = {
           eventBindings: [['.save_button', 'click', function (e) {
             e.preventDefault();
             startSpinner(deleteDocDialog);
-            couchReq('DELETE', buildDocURL(dbURL, id), null, function () {
+            couchReq('DELETE', buildURL(self.selectedBucketCRUDBaseCell.value + "/", id), null, function () {
               stopSpinner();
               hideDialog(deleteDocDialog);
               self.currentPageDocsCell.recalculate();
@@ -765,6 +755,10 @@ var DocumentsSection = {
 
       docDeleteBtn.click(function (e) {
         e.preventDefault();
+        var currentDocId = self.currentDocumentIdCell.value;
+        if (!currentDocId) {
+          return;
+        }
         self.deleteDocument(currentDocId, function () {
           self.documentIdCell.setValue(undefined);
         });
