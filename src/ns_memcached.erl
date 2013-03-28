@@ -968,7 +968,7 @@ host_port(Node, Config) ->
 -spec host_port(node()) ->
                            {nonempty_string(), pos_integer()}.
 host_port(Node) ->
-    host_port(Node, ns_config:get()).
+    host_port(Node, ns_config:get_latest_ref()).
 
 -spec host_port_str(node()) ->
                            nonempty_string().

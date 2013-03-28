@@ -53,6 +53,7 @@
          start_link/2, start_link/1,
          merge/1,
          get/2, get/1, get/0, set/2, set/1,
+         get_latest_ref/0, search_with_default/2,
          cas_config/2,
          set_initial/2, update/2, update_key/2, update_key/3,
          update_sub_key/3, set_sub/2, set_sub/3,
@@ -321,23 +322,43 @@ get_kv_list() -> get_kv_list(?DEFAULT_TIMEOUT).
 -spec get_kv_list(timeout()) -> [{term(), term()}].
 get_kv_list(Timeout) -> config_dynamic(ns_config:get(node(), Timeout)).
 
+get_latest_ref() ->
+    'latest-config'.
+
 % ----------------------------------------
 
 search(Key) ->
     eval(
       fun (Config) ->
-              search(Config, Key)
+              search_ll(Config, Key)
       end).
 
-search_node(Key) -> search_node(?MODULE:get(), Key).
 
+search_node(Key) -> search_node(get_latest_ref(), Key).
+
+search('latest-config', Key) ->
+    search(Key);
 search(Config, Key) ->
+    search_ll(Config, Key).
+
+search_ll(Config, Key) ->
     case search_raw(Config, Key) of
         {value, X} -> {value, strip_metadata(X)};
         false      -> false
     end.
 
+search_with_default(Key, Default) ->
+    eval(
+      fun (Config) ->
+              search_ll_with_default(Config, Key, Default)
+      end).
+
+search('latest-config', Key, Default) ->
+    search_with_default(Key, Default);
 search(Config, Key, Default) ->
+    search_ll_with_default(Config, Key, Default).
+
+search_ll_with_default(Config, Key, Default) ->
     case ns_config:search(Config, Key) of
         {value, V} ->
             V;
