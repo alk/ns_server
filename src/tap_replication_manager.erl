@@ -150,6 +150,16 @@ cancel_replicator_reset(T, SrcNode) ->
             ets:delete(T, SrcNode)
     end.
 
+assert_no_replications_from(Bucket, Node) ->
+    case get_children(Bucket) of
+        not_running ->
+            ok;
+        Kids ->
+            [case childs_node_and_vbuckets(ChildId) of
+                 {N, _} when N =/= Node -> ok
+             end || ChildId <- Kids],
+            ok
+    end.
 
 start_child(#state{bucket_name = Bucket,
                    not_readys_per_node_ets = T},
@@ -162,6 +172,9 @@ start_child(#state{bucket_name = Bucket,
     Child = ns_vbm_new_sup:make_replicator(SrcNode, VBuckets),
     ChildSpec = child_to_supervisor_spec(Bucket, Child),
     cancel_replicator_reset(T, SrcNode),
+    %% lets double check ourselves and ensure there are no other
+    %% replicators from same node
+    assert_no_replications_from(Bucket, SrcNode),
     case supervisor:start_child(Sup, ChildSpec) of
         {ok, _} = R -> R;
         {ok, _, _} = R -> R
@@ -176,8 +189,13 @@ kill_child(#state{bucket_name = Bucket,
     cancel_replicator_reset(T, SrcNode),
     %% we're ok if child is already dead. There's not much we can or
     %% should do about that
-    _ = supervisor:terminate_child(Sup, Child).
+    _ = supervisor:terminate_child(Sup, Child),
+    %% lets double check ourselves and ensure there are no other
+    %% replicators from same node (or alternatively that we didn't
+    %% 'miss' our kill shot)
+    assert_no_replications_from(Bucket, SrcNode).
 
+-spec change_vbucket_filter(#state{}, node(), [vbucket_id(),...], [vbucket_id(),...]) -> ok.
 change_vbucket_filter(#state{bucket_name = Bucket,
                              not_readys_per_node_ets = T},
                       SrcNode, OldVBuckets, NewVBuckets) ->
@@ -190,12 +208,17 @@ change_vbucket_filter(#state{bucket_name = Bucket,
     MFA = {ebucketmigrator_srv, start_vbucket_filter_change, [NewVBuckets]},
 
     cancel_replicator_reset(T, SrcNode),
-    {ok, ns_vbm_new_sup:perform_vbucket_filter_change(Bucket,
-                                                      OldChildId,
-                                                      NewChildId,
-                                                      Args,
-                                                      MFA,
-                                                      ns_vbm_new_sup:server_name(Bucket))}.
+    Pid = ns_vbm_new_sup:perform_vbucket_filter_change(Bucket,
+                                                       OldChildId,
+                                                       NewChildId,
+                                                       Args,
+                                                       MFA,
+                                                       ns_vbm_new_sup:server_name(Bucket)),
+
+    case Pid of
+        _ when is_pid(Pid) ->
+            ok
+    end.
 
 childs_node_and_vbuckets(Child) ->
     {Node, _} = ns_vbm_new_sup:replicator_nodes(node(), Child),
