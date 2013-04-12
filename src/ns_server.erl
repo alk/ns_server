@@ -35,6 +35,11 @@ start(_Type, _Args) ->
     setup_static_config(),
     init_logging(),
 
+    {ok, DataDir} = application:get_env(ns_server, path_config_datadir),
+    InitArgs = init:get_arguments(),
+    InitArgs1 = [{pid, os:getpid()} | InitArgs],
+    ok = file:write_file(filename:join(DataDir, "initargs"), term_to_binary(InitArgs1)),
+
     %% To initialize logging static config must be setup thus this weird
     %% machinery is required to log messages from setup_static_config().
     self() ! done,

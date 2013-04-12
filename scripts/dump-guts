@@ -74,7 +74,8 @@ options_descriptions() ->
     [{"static-config", "<path-to-config>"},
      {"node-file", "<path-to-node-file>"},
      {"node-name", undefined},
-     {"couch-etc-dir", "<path to etc/couchdb>"},
+     {"couch-inis", "<paths to etc/couchdb/*.ini separated by ;>"},
+     {"initargs-path", "<path to var/lib/couchbase/initargs>"},
      {"guess-prefix", bool},
      {"help", bool}].
 
@@ -138,38 +139,151 @@ main(Args) ->
 -record(config, {static_config,
                  node_file,
                  node_name,
-                 couch_etc_dir,
+                 couch_inis,
+                 initargs_path,
                  guess_prefix}).
 
 flag_to_config_field("static-config") -> #config.static_config;
 flag_to_config_field("node-file") -> #config.node_file;
 flag_to_config_field("node-name") -> #config.node_name;
-flag_to_config_field("couch-etc-dir") -> #config.couch_etc_dir;
+flag_to_config_field("couch-inis") -> #config.couch_inis;
+flag_to_config_field("initargs-path") -> #config.initargs_path;
 flag_to_config_field("guess-prefix") -> #config.guess_prefix.
 
 confget(Field) ->
     Config = erlang:get(config),
     erlang:element(Field, Config).
 
+do_get_initargs(Path) ->
+    case file:read_file(Path) of
+        {ok, Binary} ->
+            case (catch {ok, binary_to_term(Binary)}) of
+                {ok, _Term} = RV ->
+                    RV;
+                Err ->
+                    {error, {binary_to_term_failed, Err}}
+            end;
+        Err ->
+            Err
+    end.
+
+get_initargs(#config{initargs_path = Path}) ->
+    Key = {get_initargs, Path},
+    case erlang:get(Key) of
+        undefined ->
+            RV = do_get_initargs(Path),
+            case RV of
+                {ok, _} ->
+                    %% complain("Got initargs:~n~p~n", [RV]),
+                    ok;
+                _ ->
+                    complain("Failed to read initargs:~n~p~n", [RV])
+            end,
+            erlang:put(Key, RV),
+            RV;
+        RV ->
+            RV
+    end.
+
+get_app_init_arg(InitArgs, App, Flag) ->
+    RV = do_get_app_init_arg(InitArgs, App, atom_to_list(Flag)),
+    try make_term(RV) of
+        V -> {ok, V}
+    catch T:E ->
+            {make_term_error, Flag, RV, T, E, erlang:get_stacktrace()}
+    end.
+
+do_get_app_init_arg([], _App, _Flag) ->
+    undefined;
+do_get_app_init_arg([{App, Args} | Rest], App, Flag) ->
+    case do_get_app_init_arg(Rest, App, Flag) of
+        undefined ->
+            get_app_init_arg_scan_args(Args, Flag);
+        Value ->
+            Value
+    end;
+do_get_app_init_arg([_ | Rest], App, Flag) ->
+    do_get_app_init_arg(Rest, App, Flag).
+
+get_app_init_arg_scan_args([], _Flag) ->
+    undefined;
+get_app_init_arg_scan_args([Flag, Value | Rest], Flag) ->
+    case get_app_init_arg_scan_args(Rest, Flag) of
+        undefined ->
+            Value;
+        Value ->
+            Value
+    end;
+get_app_init_arg_scan_args([_, _ | Rest], Flag) ->
+    get_app_init_arg_scan_args(Rest, Flag);
+get_app_init_arg_scan_args(_, _Flag) ->
+    undefined.
+
+%% (alk) NOTE: the following is stolen from application_controller in
+%% erlang src
+%%
+% Fix some day: eliminate the duplicated code here
+make_term(Str) ->
+    case erl_scan:string(Str) of
+	{ok, Tokens, _} ->
+	    case erl_parse:parse_term(Tokens ++ [{dot, 1}]) of
+		{ok, Term} ->
+		    Term;
+		{error, {_,_M,_Reason}} ->
+		    %% error_logger:format("application_controller: ~s: ~s~n",
+		    %%     		[M:format_error(Reason), Str]),
+		    throw({error, {bad_environment_value, Str}})
+	    end;
+	{error, {_,_M,_Reason}, _} ->
+	    %% error_logger:format("application_controller: ~s: ~s~n",
+	    %%     		[M:format_error(Reason), Str]),
+	    throw({error, {bad_environment_value, Str}})
+    end.
+
+massage_config_with_not_undefined(Config, Field) ->
+    Config1 = setelement(Field, Config, not_undefined),
+    Config2 = massage_config(Config1),
+    setelement(Field, Config2, undefined).
+
+massage_config(#config{initargs_path = undefined,
+                       guess_prefix = true} = Config) ->
+    Path = filename:absname(
+             filename:join([filename:dirname(escript:script_name()),
+                            "..",
+                            "..",
+                            "var",
+                            "lib"
+                            "couchbase",
+                            "initargs"])),
+    massage_config(Config#config{initargs_path = Path});
 massage_config(#config{static_config = undefined,
-                       guess_prefix = true} = Config) ->
-    ConfigPath = filename:absname(filename:join([filename:dirname(escript:script_name()),
-                                                 "..",
-                                                 "..",
-                                                 "etc",
-                                                 "couchbase",
-                                                 "static_config"])),
-    complain("Assuming --static-config=~s~n", [ConfigPath]),
-    massage_config(Config#config{static_config = ConfigPath});
-massage_config(#config{couch_etc_dir = undefined,
-                       guess_prefix = true} = Config) ->
-    Path = filename:absname(filename:join([filename:dirname(escript:script_name()),
-                                           "..",
-                                           "..",
-                                           "etc",
-                                           "couchdb"])),
-    complain("Assuming --couch-etc-dir=~s~n", [Path]),
-    massage_config(Config#config{couch_etc_dir = Path});
+                       initargs_path = InitArgsPath} = Config) when InitArgsPath =/= undefined ->
+    case get_initargs(Config) of
+        {ok, InitArgs} ->
+            case get_app_init_arg(InitArgs, ns_server, config_path) of
+                {ok, ConfigPath} ->
+                    massage_config(Config#config{static_config = ConfigPath});
+                Err ->
+                    complain("Failed to extract config_path from initargs: ~p~n", [Err]),
+                    massage_config_with_not_undefined(Config, #config.static_config)
+            end;
+        _Err ->
+            massage_config_with_not_undefined(Config, #config.static_config)
+    end;
+massage_config(#config{couch_inis = undefined,
+                       initargs_path = InitArgsPath} = Config) when InitArgsPath =/= undefined ->
+    case get_initargs(Config) of
+        {ok, InitArgs} ->
+            case proplists:get_value(couch_ini, InitArgs) of
+                undefined ->
+                    complain("Failed to get couch_ini: ~p~n", [InitArgs]),
+                    massage_config_with_not_undefined(Config, #config.couch_inis);
+                Values ->
+                    Config#config{couch_inis = string:join(Values, ";")}
+            end;
+        _Err ->
+            massage_config_with_not_undefined(Config, #config.couch_inis)
+    end;
 massage_config(Config) ->
     Config.
 
@@ -185,24 +299,42 @@ main_main(Flags, []) ->
                                   erlang:setelement(Field, Acc, Value)
                           end, #config{}, Flags),
     Config = massage_config(Config0),
-    %% complain("Flags:~n~p~n~n", [Flags]),
-    %% complain("Config: ~p~n", [Config]),
     erlang:put(config, Config),
     StaticPath = Config#config.static_config,
     case StaticPath of
         undefined ->
+            %% TODO: message below
             complain("--static_config= option is required\n", []),
             usage(),
             init:stop(1);
         _ ->
             case file:consult(StaticPath) of
-                {ok, T} when is_list(T) ->
-                    main_with_static_config(T);
+                {ok, Terms} when is_list(Terms) ->
+                    Terms2 = case get_initargs(Config) of
+                                 {ok, InitArgs} ->
+                                     maybe_override_static_config_with_initargs(Terms, InitArgs);
+                                 _ ->
+                                     Terms
+                             end,
+                    main_with_static_config(Terms2);
                 Err ->
-                    io:format(standard_error, "Failed to read static config:~n~p~n", [Err]),
+                    io:format(standard_error, "Failed to read static config ~s (~p):~n~p~n", [filename:absname(StaticPath), file:get_cwd(), Err]),
                     init:stop(1)
             end
     end.
+
+maybe_override_static_config_with_initargs(Terms, InitArgs) ->
+    %% complain("InitArgs:~n~p", [InitArgs]),
+    Prepends0 =
+        [case get_app_init_arg(InitArgs, ns_server, K) of
+             {ok, Value} ->
+                 %% complain("overriding: ~p with ~p~n", [K, Value]),
+                 [{K, Value}];
+             _Err ->
+                 %% complain("Not overriding ~p: ~p~n", [K, Err]),
+                 []
+         end || {K, _} <- Terms],
+    lists:append(Prepends0) ++ Terms.
 
 read_config(DataDir) ->
     DynamicCfgPath = filename:join([DataDir, "config", "config.dat"]),
@@ -253,6 +385,7 @@ do_read_node(StaticConfig) ->
     end.
 
 read_couch_ini_file(Path) ->
+    complain("Reading couch ini: ~p~n", [Path]),
     case file:read_file(Path) of
         {ok, Binary} ->
             parse_couch_ini_file(Binary);
@@ -261,10 +394,13 @@ read_couch_ini_file(Path) ->
     end.
 
 read_couch_inis() ->
-    BaseIniDir = confget(#config.couch_etc_dir),
-    RVPairs = [{Name, read_couch_ini_file(filename:join(BaseIniDir, Name))}
-               || Name <- ["local.ini",         % note: first config to read takes precedence
-                           "default.ini"]],
+    Paths0 = confget(#config.couch_inis),
+    %% usually last ini file overrides any values in previous
+    %% config. To get similar behavior with simple proplist:get_value
+    %% we reverse list of inis
+    Paths = lists:reverse(string:tokens(Paths0, ";")),
+    RVPairs = [{Name, read_couch_ini_file(Name)}
+               || Name <- Paths],
     Errors = [Pair || {_, RV} = Pair <- RVPairs,
                       case RV of
                           {ok, _} -> false;
