@@ -51,13 +51,19 @@ class Task(object):
         """Run the task"""
         import subprocess
         use_shell = not isinstance(self.command, list)
-        if hasattr(self, 'reformat') and self.reformat:
+        if self.__dict__["literal"]:
+            print >> fp, self.literal
+        elif hasattr(self, 'reformat') and self.reformat:
             p = subprocess.Popen(self.command, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, shell = use_shell)
             print >> fp, p.stdout.read()
         else:
+            env = None
+            if self.__dict__["addenv"]:
+                env = os.environ.copy()
+                env.update(self.addenv)
             p = subprocess.Popen(self.command, bufsize=-1, stdout=fp, stderr=fp,
-                                 shell = use_shell)
+                                 shell = use_shell, env = env)
         return p.wait()
 
     def will_run(self):
@@ -260,18 +266,12 @@ def get_credential():
     else:
         return ""
 
-def make_tasks(root="/opt/couchbase", dbdir=""):
+def make_os_tasks:
   _tasks = [
     UnixTask("uname", "uname -a"),
     WindowsTask("System information", "systeminfo"),
     WindowsTask("Computer system", "wmic computersystem", reformat=True),
     WindowsTask("Computer OS", "wmic os", reformat=True),
-    UnixTask("Directory structure",
-             "ls -lR '%s' /opt/membase /var/membase /etc/opt/membase" % root),
-    UnixTask("Database directory structure",
-             "ls -lR " + dbdir),
-    WindowsTask("Database directory structure",
-                ["dir", "/s", dbdir.replace("/", "\\")]),
     UnixTask("Directory structure membase - previous versions",
              "ls -lR /opt/membase /var/membase /var/opt/membase /etc/opt/membase"),
     SolarisTask("Process list snapshot", "prstat -a -c -n 100 -t -v -L 1 10"),
@@ -332,25 +332,6 @@ def make_tasks(root="/opt/couchbase", dbdir=""):
     WindowsTask("Physical memory", "wmic memphysical", reformat=True),
     WindowsTask("Physical memory chip info", "wmic memorychip", reformat=True),
     WindowsTask("Local storage devices", "wmic logicaldisk", reformat=True),
-    WindowsTask("Version file",
-                "type " + basedir() + "\\..\\VERSION.txt", reformat=True),
-    WindowsTask("Manifest file",
-                "type " + basedir() + "\\..\\manifest.txt", reformat=True),
-    WindowsTask("Manifest file",
-                "type " + basedir() + "\\..\\manifest.xml", reformat=True),
-    WindowsTask("Couchbase config",
-                basedir() + "\\escript.exe " +
-                basedir() + "\\cbdump-config " +
-                basedir() + "\\..\\var\\lib\\couchbase\\config\\config.dat",
-                reformat=True),
-    WindowsTask("Memcached logs",
-                "cd " + basedir() + "\\..\\var\\lib\\couchbase\\logs && " +
-                "for /f %a IN ('dir /od /b memcached.log.*') do type %a",
-                log_file="memcached.log", reformat=True),
-    WindowsTask("Ini files",
-                "cd " + basedir() + "\\..\\etc && " +
-                "for /f %a IN ('dir /od /s /b *.ini') do type %a",
-                log_file="ini.log", reformat=True),
     UnixTask("Filesystem", "df -ha"),
     UnixTask("System activity reporter", "sar 1 10"),
     UnixTask("System paging activity", "vmstat 1 10"),
@@ -374,150 +355,179 @@ def make_tasks(root="/opt/couchbase", dbdir=""):
     LinuxTask("NUMA data", "numactl --hardware"),
     LinuxTask("NUMA data", "numactl --show"),
     LinuxTask("NUMA data", "cat /sys/devices/system/node/node*/numastat"),
+    UnixTask("Kernel log buffer", "dmesg"),
+  ]
+
+  return _tasks
+
+# stolen from http://rightfootin.blogspot.com/2006/09/more-on-python-flatten.html
+def iter_flatten(iterable):
+  it = iter(iterable)
+  for e in it:
+    if isinstance(e, (list, tuple)):
+      for f in iter_flatten(e):
+        yield f
+    else:
+      yield e
+
+def flatten(iterable):
+    [e for e in iter_flatten(iterable)]
+
+def make_product_task(guts, initargs_path):
+  root = os.path.abspath(os.path.join(initargs_path, "..", ".."))
+  dbdir = guts["db_dir"]
+  _tasks = [
+    UnixTask("Directory structure",
+             ["ls", "-lR", root, "/opt/membase", "/var/membase", "/etc/opt/membase"]),
+    UnixTask("Database directory structure",
+             ["ls", "-lR", dbdir]),
+    WindowsTask("Database directory structure",
+                ["dir", "/s", dbdir.replace("/", "\\")]),
+    UnixTask("Directory structure membase - previous versions",
+             "ls -lR /opt/membase /var/membase /var/opt/membase /etc/opt/membase"),
+    WindowsTask("Version file",
+                "type " + basedir() + "\\..\\VERSION.txt", reformat=True),
+    WindowsTask("Manifest file",
+                "type " + basedir() + "\\..\\manifest.txt", reformat=True),
+    WindowsTask("Manifest file",
+                "type " + basedir() + "\\..\\manifest.xml", reformat=True),
     LinuxTask("Version file", "cat '%s/VERSION.txt'" % root),
     LinuxTask("Manifest file", "cat '%s/manifest.txt'" % root),
     LinuxTask("Manifest file", "cat '%s/manifest.xml'" % root),
+    AllOsTask("Couchbase config", "", literal = guts["ns_config"])
+    # TODO: just gather those in python
+    WindowsTask("Memcached logs",
+                "cd \"" + guts["memcached_logs_path"] + "\" && " +
+                "for /f %a IN ('dir /od /b memcached.log.*') do type %a",
+                log_file="memcached.log", reformat=True),
     LinuxTask("Memcached logs",
-              "cd '%s'/var/lib/couchbase/logs && " % root +
-              "for file in $(ls -tr memcached.log.*); do cat \"$file\"; done",
+              ["sh", "-c", 'cd "$1"; for file in $(ls -tr memcached.log.*); do cat \"$file\"; done', "--", guts["memcached_logs_path"]],
               log_file="memcached.log"),
-    LinuxTask("Ini files",
-              "cd '%s'/etc && " % root +
-              "for file in $(find . -type f -name '*.ini'); do echo -e \"\nFile: ${file}\n\";" +
-              "cat \"$file\"; done",
+    WindowsTask("Ini files",
+                ["type " + p for p in guts["couch_inis"].split(";")].join(' ; ')
+                log_file="ini.log", reformat=True),
+    UnixTask("Ini files",
+             ["xargs", "-n1", "--", "sh", "-c", 'echo "file: $1"; cat $1', "--"] + guts["couch_inis"].split(";")
               log_file="ini.log"),
-    UnixTask("Kernel log buffer", "dmesg"),
-    LinuxTask("couchbase config",
-              "'%s'/escript '%s'/cbdump-config '%s/var/lib/couchbase/config/config.dat'"
-              % (os.path.dirname(sys.argv[0]), os.path.dirname(sys.argv[0]), root)),
-    AllOsTask("couchbase logs (debug)", "cbbrowse_logs",
-              log_file="ns_server.debug.log"),
-    AllOsTask("couchbase logs (info)", "cbbrowse_logs info",
-              log_file="ns_server.info.log"),
-    AllOsTask("couchbase logs (error)", "cbbrowse_logs error",
-              log_file="ns_server.error.log"),
-    AllOsTask("couchbase logs (couchdb)", "cbbrowse_logs couchdb",
-              log_file="ns_server.couchdb.log"),
-    AllOsTask("couchbase logs (xdcr)", "cbbrowse_logs xdcr",
-              log_file="ns_server.xdcr.log"),
-    AllOsTask("couchbase logs (xdcr_errors)", "cbbrowse_logs xdcr_errors",
-              log_file="ns_server.xdcr_errors.log"),
-    AllOsTask("couchbase logs (views)", "cbbrowse_logs views",
-              log_file="ns_server.views.log"),
-    AllOsTask("couchbase logs (mapreduce errors)", "cbbrowse_logs mapreduce_errors",
-              log_file="ns_server.mapreduce_errors.log"),
-    AllOsTask("couchbase logs (stats)", "cbbrowse_logs stats",
-              log_file="ns_server.stats.log"),
-    AllOsTask("couchbase logs (babysitter)", "cbbrowse_logs babysitter",
-              log_file="ns_server.babysitter.log"),
-    AllOsTask("memcached stats all",
-              "cbstats -a 127.0.0.1:11210 all -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats checkpoint",
-              "cbstats -a 127.0.0.1:11210 checkpoint -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats config",
-              "cbstats -a 127.0.0.1:11210 config -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats dispatcher",
-              "cbstats -a 127.0.0.1:11210 dispatcher logs -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats hash",
-              "cbstats -a 127.0.0.1:11210 hash detail -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats klog",
-              "cbstats -a 127.0.0.1:11210 klog -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats kvstore",
-              "cbstats -a 127.0.0.1:11210 kvstore -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats kvtimings",
-              "cbstats -a 127.0.0.1:11210 kvtimings -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats tap",
-              "cbstats -a 127.0.0.1:11210 tap -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats tapagg",
-              "cbstats -a 127.0.0.1:11210 tapagg -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats timings",
-              "cbstats -a 127.0.0.1:11210 timings -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached memory stats",
-              "cbstats -a 127.0.0.1:11210 raw memory -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached allocator stats",
-              "cbstats -a 127.0.0.1:11210 raw allocator -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats prev-vbucket",
-              "cbstats -a 127.0.0.1:11210 prev-vbucket -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats vbucket",
-              "cbstats -a 127.0.0.1:11210 vbucket -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats vbucket details",
-              "cbstats -a 127.0.0.1:11210 vbucket-details -b _admin -p _admin",
-              log_file="stats.log"),
-    AllOsTask("memcached stats warmup",
-              "cbstats -a 127.0.0.1:11210 warmup -b _admin -p _admin",
-              log_file="stats.log")
-  ]
 
-  c = get_credential()
-  if c:
-      _tasks.append(
-          AllOsTask("couchbase diags",
-                    ["curl", "-sS", "-u", c, "http://127.0.0.1:8091/diag?noLogs=1"],
-                    log_file="diag.log"))
+    [AllOsTask("couchbase logs (%s)" % name, "cbbrowse_logs",
+               addenv = [("REPORT_DIR", guts["log_path"])],
+               log_file="ns_server.%s.log" % name)
+     for name in ["debug", "info", "error", "couchdb",
+                  "xdcr", "xdcr_errors",
+                  "views", "mapreduce_errors",
+                  "stats", "babysitter"]],
+
+    [AllOsTask("memcached stats %s" % kind,
+               flatten(["cbstats", "-a", "127.0.0.1:%s" % guts["memcached_port"], kind, "-b", guts["memcached_admin"], "-p", guts["memcached_pass"]]),
+               log_file="stats.log")
+     for kind in ["all", "checkpoint", "config", "dispatcher",
+                  "hash", "klog", "kvstore", "kvtimings",
+                  "tap", "tapagg", "timings",
+                  ["raw", "memory"], ["raw", "allocator"],
+                  "prev-vbucket", "vbucket", "vbucket-details",
+                  "warmup"]],
+
+    AllOsTask("couchbase diags",
+              ["curl", "-sS",
+               "-u", '%s:%s' % (guts["rest_user"], guts["rest_pass"]),
+               "http://127.0.0.1:%s/diag?noLogs=1" % guts["rest_port"]],
+              log_file="diag.log")]
+
+  _tasks = flatten(_tasks)
 
   try:
     for f in os.listdir(dbdir):
       path = os.path.join(dbdir, f)
       #find bucket directory
       if os.path.isdir(path) and f not in [".delete", "@indexes"]:
-          files = glob.glob("%s/master.couch.[0-9]*" % path)
-          if files:
-              ddoc = sorted(files, key=lambda x: int(x.split(".")[-1]))[-1]
-              _tasks.append(
-                  AllOsTask("couchbase design docs - bucket:%s" % f,
-                            "couch_dbdump \"%s\"" % (os.path.join(path, ddoc)),
-                            log_file="ddocs.log"))
+        files = glob.glob("%s/master.couch.[0-9]*" % path)
+        if files:
+          ddoc = sorted(files, key=lambda x: int(x.split(".")[-1]))[-1]
+          _tasks.append(
+            AllOsTask("couchbase design docs - bucket:%s" % f,
+                      "couch_dbdump \"%s\"" % (os.path.join(path, ddoc)),
+                      log_file="ddocs.log"))
   except:
     pass
   return _tasks
 
-def main():
-    from optparse import OptionParser
-    parser = OptionParser(usage=USAGE)
-    parser.add_option("-r", dest="root",
-                      help="root directory - defaults to /opt/couchbase",
-                      default="/opt/couchbase")
-    parser.add_option("-v", dest="verbosity", help="increase verbosity level",
-                      action="count", default=0)
-    options, args = parser.parse_args()
 
-    if len(args) != 1:
-        parser.error("incorrect number of arguments")
+def get_server_guts(initargs_path):
+  dump_guts_path = os.path.join(basedir(), "..", "lib", "ns_server", "dump-guts"),
+  escript = "%s/escript" % basedir(),
+  if platform.system() == 'Windows':
+    escript = escript + ".exe"
+    extra_args = os.getenv("EXTRA_DUMP_GUTS_ARGS")
+    if not extra_args:
+      extra_args = ""
+    args = [escript, dump_guts_path, "--initargs-path", initargs_path] + extra_args.split(";")
+    p = subprocess.Popen(args, stdout = subprocess.PIPE)
+    output = p.stdout.read()
+    p.wait()
+    tokens = output.rstrip("\0").split("\0")
+    d = {}
+    if len(tokens) > 1:
+      for i in xrange(0, len(tokens), 2):
+        d[tokens[i]] = tokens[i+1]
+    return d
+
+
+def main():
+  from optparse import OptionParser
+  parser = OptionParser(usage=USAGE)
+  parser.add_option("-r", dest="root",
+                    help="root directory - defaults to /opt/couchbase",
+                    default="/opt/couchbase")
+  parser.add_option("-v", dest="verbosity", help="increase verbosity level",
+                    action="count", default=0)
+  options, args = parser.parse_args()
+
+  if len(args) != 1:
+    parser.error("incorrect number of arguments")
 
     mydir = os.path.dirname(sys.argv[0])
     erldir = os.path.join(mydir, 'erlang', 'bin')
     if os.name == 'posix':
-        path = [mydir,
-                '/bin',
-                '/sbin',
-                '/usr/bin',
-                '/usr/sbin',
-                '/opt/couchbase/bin',
-                erldir,
-                os.environ['PATH']]
-        os.environ['PATH'] = ':'.join(path)
+      path = [mydir,
+              '/bin',
+              '/sbin',
+              '/usr/bin',
+              '/usr/sbin',
+              '/opt/couchbase/bin',
+              erldir,
+              os.environ['PATH']]
+      os.environ['PATH'] = ':'.join(path)
     elif os.name == 'nt':
-        path = [mydir, erldir, os.environ['PATH']]
-        os.environ['PATH'] = ';'.join(path)
-    dbdir = get_dbdir(mydir)
+      path = [mydir, erldir, os.environ['PATH']]
+      os.environ['PATH'] = ';'.join(path)
+
     runner = TaskRunner(verbosity=options.verbosity)
-    for task in make_tasks(options.root, dbdir):
-        runner.run(task)
+
+    for task in make_os_tasks():
+      runner.run(task)
+
+    initargs_variants = [os.path.absname(os.path.join(mydir, "..", "var", "lib", "couchbase", "initargs")),
+                         "/opt/couchbase/var/lib/couchbase/initargs",
+                         os.path.expanduser("~/Library/Application Support/Couchbase/var/lib/couchbase/initargs")],
+
+    longest_guts = None
+    longest_guts_initargs_path = None
+
+    for initargs_path in initargs_variants:
+        d = get_server_guts(initargs_path)
+        if len(d) > 0 and ((longest_guts == None) or len(longest_guts) < len(d)):
+            longest_guts = d
+            longest_guts_initargs_path = initargs_path
+
+    if longest_guts:
+        runner.run(
+            AllOsTask("product diag stuf",
+                      "",
+                      literal = "found server initargs at %s (%d)" % (longest_guts_initargs_path, len(longest_guts))))
+
+        for task in make_product_task(longest_guts):
+            runner.run(task)
 
     runner.zip(args[0], get_node())
 

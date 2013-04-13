@@ -290,8 +290,8 @@ massage_config(Config) ->
 main_main(_Flags, [_|_]) ->
     complain("Got non-option arguments~n", []),
     usage(),
-    {ok, Bin} = file:read_file("etc/capi.ini.in"),
-    io:format("Couch stuff:~n~p~n", [parse_couch_ini_file(Bin)]),
+    %% {ok, Bin} = file:read_file("etc/capi.ini.in"),
+    %% complain("Couch stuff:~n~p~n", [parse_couch_ini_file(Bin)]),
     init:stop(1);
 main_main(Flags, []) ->
     Config0 = lists:foldl(fun ({Flag, Value}, Acc) ->
@@ -303,9 +303,13 @@ main_main(Flags, []) ->
     StaticPath = Config#config.static_config,
     case StaticPath of
         undefined ->
-            %% TODO: message below
-            complain("--static_config= option is required\n", []),
-            usage(),
+            case Config of
+                #config{initargs_path = undefined} ->
+                    complain("--static-config= or --initargs-path= option is required\n", []),
+                    usage();
+                _ ->
+                    ok
+            end,
             init:stop(1);
         _ ->
             case file:consult(StaticPath) of
@@ -520,6 +524,7 @@ main_with_everything(StaticTerms, NSConfig, CouchInisPList, Node) ->
     MCDPort = search_config(MCDConfig, port, ""),
     MCDAdmin = search_config(MCDConfig, admin_user, ""),
     MCDPass = search_config(MCDConfig, admin_pass, ""),
+    MCDLogs = search_config(MCDConfig, log_path, ""),
     BucketConfigs = search_config(search_config(NSConfig, buckets, []),
                                   configs, []),
     BucketTypePairs = [{Name, search_config(Props, type, undefined)} || {Name, Props} <- BucketConfigs],
@@ -530,6 +535,7 @@ main_with_everything(StaticTerms, NSConfig, CouchInisPList, Node) ->
                               ""),
     Pairs = [{ns_config, iolist_to_binary(io_lib:format("~p", [NSConfig]))},
              {static_config, iolist_to_binary(io_lib:format("~p", [StaticTerms]))},
+             {couch_inis, confget(#confget.couch_inis)},
              {node, Node},
              {db_dir, DBDir},
              {idx_dir, IdxDir},
@@ -542,7 +548,8 @@ main_with_everything(StaticTerms, NSConfig, CouchInisPList, Node) ->
              {ns_log_path, NSLogPath},
              {log_path, search_config(StaticTerms, error_logger_mf_dir, "")},
              {memcached_admin, MCDAdmin},
-             {memcached_pass, MCDPass}],
+             {memcached_pass, MCDPass},
+             {memcached_logs_path, MCDLogs}],
 
     output([E || {K, V} <- Pairs,
                  E <- [K, V]]),
