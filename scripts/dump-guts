@@ -342,7 +342,7 @@ maybe_override_static_config_with_initargs(Terms, InitArgs) ->
 
 read_config(DataDir) ->
     DynamicCfgPath = filename:join([DataDir, "config", "config.dat"]),
-    complain("Will read config.dat here: ~s~n", [DynamicCfgPath]),
+    %% complain("Will read config.dat here: ~s~n", [DynamicCfgPath]),
     case file:read_file(DynamicCfgPath) of
         {ok, Data} ->
             [Config|_] = erlang:binary_to_term(Data),
@@ -389,7 +389,7 @@ do_read_node(StaticConfig) ->
     end.
 
 read_couch_ini_file(Path) ->
-    complain("Reading couch ini: ~p~n", [Path]),
+    %% complain("Reading couch ini: ~p~n", [Path]),
     case file:read_file(Path) of
         {ok, Binary} ->
             parse_couch_ini_file(Binary);
@@ -535,7 +535,7 @@ main_with_everything(StaticTerms, NSConfig, CouchInisPList, Node) ->
                               ""),
     Pairs = [{ns_config, iolist_to_binary(io_lib:format("~p", [NSConfig]))},
              {static_config, iolist_to_binary(io_lib:format("~p", [StaticTerms]))},
-             {couch_inis, confget(#confget.couch_inis)},
+             {couch_inis, confget(#config.couch_inis)},
              {node, Node},
              {db_dir, DBDir},
              {idx_dir, IdxDir},
