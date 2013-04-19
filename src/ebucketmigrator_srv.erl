@@ -643,8 +643,29 @@ init({Src, Dst, Opts}=InitArgs) ->
     (catch master_activity_events:note_ebucketmigrator_start(self(), Src, Dst, [{bucket, Bucket},
                                                                                 {username, Username}
                                                                                 | Args])),
+
+    case proplists:get_value(note_tap_stats, Opts) of
+        undefined ->
+            ok;
+        NoteTapTag ->
+            do_note_tap_stats(State, NoteTapTag)
+    end,
+
     gen_server:enter_loop(?MODULE, [], State2).
 
+do_note_tap_stats(#state{upstream_aux = Aux,
+                         vbuckets = VBs,
+                         tap_name = TapName},
+                  NoteTapTag) ->
+    ?rebalance_debug("Handling note_tap_stats"),
+    VB = hd(sets:to_list(VBs)),
+    case (catch mc_client_binary:get_tap_docs_estimate(Aux, VB, TapName)) of
+        {ok, Estimate} ->
+            (catch master_activity_events:note_tap_stats(NoteTapTag, Estimate));
+        Error ->
+            ?rebalance_error("Failed to get tap docs estimate: ~p~n~p", [Error, erlang:get_stacktrace()]),
+            (catch master_activity_events:note_tap_stats(NoteTapTag, 0))
+    end.
 
 upstream_sender_loop(Upstream) ->
     receive

@@ -49,6 +49,7 @@
          note_compaction_inhibited/2,
          note_compaction_uninhibited/2,
          note_forced_inhibited_view_compaction/1,
+         note_tap_stats/2,
          event_to_jsons/1,
          event_to_formatted_iolist/1,
          format_some_history/1]).
@@ -167,6 +168,9 @@ note_compaction_uninhibited(BucketName, Node) ->
 
 note_forced_inhibited_view_compaction(BucketName) ->
     submit_cast({forced_inhibited_view_compaction, BucketName, node()}).
+
+note_tap_stats(NoteTag, Estimate) ->
+    submit_cast({tap_estimate, NoteTag, Estimate}).
 
 start_link_timestamper() ->
     {ok, ns_pubsub:subscribe_link(master_activity_events_ingress, fun timestamper_body/2, [])}.
@@ -585,6 +589,17 @@ event_to_jsons({TS, forced_inhibited_view_compaction, BucketName, Node}) ->
                                   {ts, misc:time_to_epoch_float(TS)},
                                   {bucket, BucketName},
                                   {node, node_to_host(Node, ns_config:get())}])];
+
+event_to_jsons({TS, tap_estimate, {Type, BucketName, VBucket, SrcNode, DstNode}, Estimate}) ->
+    Cfg = ns_config:get(),
+    [format_simple_plist_as_json([{type, tapEstimate},
+                                  {ts, misc:time_to_epoch_float(TS)},
+                                  {tapType, Type},
+                                  {vbucket, VBucket},
+                                  {bucket, BucketName},
+                                  {srcNode, node_to_host(SrcNode, Cfg)},
+                                  {dstNode, node_to_host(DstNode, Cfg)},
+                                  {estimate, Estimate}])];
 
 event_to_jsons(Event) ->
     ?log_warning("Got unknown kind of event: ~p", [Event]),
