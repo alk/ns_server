@@ -33,11 +33,8 @@
 -record(move_state, {vbucket :: vbucket_id(),
                      before_chain :: [node()],
                      after_chain :: [node()],
-                     stats :: [#replica_building_stats{}],
-                     backfill_done = false :: boolean(),
-                     src_indexing_paused = false :: boolean(),
-                     waiting_for_checkpoint = false :: boolean(),
-                     takeover = false :: boolean()}).
+                     vbucket_to_docs_count :: dict(),
+                     stats :: [#replica_building_stats{}]}).
 
 -record(state, {bucket :: bucket_name() | undefined,
                 current_moves :: [#move_state{}]
