@@ -113,7 +113,8 @@
          get_vbucket_checkpoint_ids/2,
          create_new_checkpoint/2,
          eval/2,
-         wait_for_checkpoint_persistence/3]).
+         wait_for_checkpoint_persistence/3,
+         get_tap_docs_estimate/3]).
 
 -include("mc_constants.hrl").
 -include("mc_entry.hrl").
@@ -521,6 +522,8 @@ do_handle_call({set_vbucket, VBucket, VBState}, _From,
 do_handle_call({stats, Key}, _From, State) ->
     Reply = mc_binary:quick_stats(State#state.sock, Key, fun mc_binary:quick_stats_append/3, []),
     {reply, Reply, State};
+do_handle_call({get_tap_docs_estimate, VBucketId, TapName}, _From, State) ->
+    {reply, mc_client_binary:get_tap_docs_estimate(State#state.sock, VBucketId, TapName), State};
 do_handle_call(topkeys, _From, State) ->
     Reply = mc_binary:quick_stats(
               State#state.sock, <<"topkeys">>,
@@ -1284,3 +1287,7 @@ disable_traffic(Bucket, Timeout) ->
 -spec wait_for_checkpoint_persistence(bucket_name(), vbucket_id(), checkpoint_id()) -> ok | mc_error().
 wait_for_checkpoint_persistence(Bucket, VBucketId, CheckpointId) ->
     gen_server:call(server(Bucket), {wait_for_checkpoint_persistence, VBucketId, CheckpointId}, infinity).
+
+-spec get_tap_docs_estimate(bucket_name(), vbucket_id(), binary()) -> {ok, non_neg_integer()}.
+get_tap_docs_estimate(Bucket, VBucketId, TapName) ->
+    do_call(server(Bucket), {get_tap_docs_estimate, VBucketId, TapName}, ?TIMEOUT).

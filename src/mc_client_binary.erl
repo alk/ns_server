@@ -54,7 +54,9 @@
          change_vbucket_filter/3,
          enable_traffic/1,
          disable_traffic/1,
-         wait_for_checkpoint_persistence/3]).
+         wait_for_checkpoint_persistence/3,
+         get_tap_docs_estimate/3
+        ]).
 
 -type recv_callback() :: fun((_, _, _) -> any()) | undefined.
 -type mc_timeout() :: undefined | infinity | non_neg_integer().
@@ -833,3 +835,13 @@ wait_for_checkpoint_persistence(Sock, VBucket, CheckpointId) ->
         Other ->
             process_error_response(Other)
     end.
+
+-spec get_tap_docs_estimate(port(), vbucket_id(), binary()) -> {ok, non_neg_integer()}.
+get_tap_docs_estimate(Sock, VBucket, TapName) ->
+    mc_binary:quick_stats(Sock,
+                          iolist_to_binary([<<"tap-vbtakeover ">>, integer_to_list(VBucket), $\s | TapName]),
+                          fun (<<"estimate">>, V, _) ->
+                                  binary_to_list(list_to_integer(V));
+                              (_, _, Acc) ->
+                                  Acc
+                          end, 0).

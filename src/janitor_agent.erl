@@ -57,7 +57,8 @@
          mass_prepare_flush/2,
          complete_flush/3,
          get_replication_persistence_checkpoint_id/4,
-         wait_checkpoint_persisted/5]).
+         wait_checkpoint_persisted/5,
+         get_tap_docs_estimate/4]).
 
 -export([start_link/1, wait_for_memcached_new_style/4]).
 
@@ -497,6 +498,11 @@ wait_checkpoint_persisted(Bucket, Rebalancer, Node, VBucket, WaitedCheckpointId)
                          {if_rebalance, Rebalancer, {wait_checkpoint_persisted, VBucket, WaitedCheckpointId}},
                          infinity).
 
+get_tap_docs_estimate(Bucket, Node, VBucket, TapName) ->
+    ok = gen_server:call({server_name(Bucket), Node},
+                         {get_tap_docs_estimate, VBucket, TapName},
+                         infinity).
+
 mass_prepare_flush(Bucket, Nodes) ->
     {Replies, BadNodes} = gen_server:multi_call(Nodes, server_name(Bucket), prepare_flush, ?PREPARE_FLUSH_TIMEOUT),
     {GoodReplies, BadReplies} = lists:partition(fun ({_N, R}) -> R =:= ok end, Replies),
@@ -682,7 +688,10 @@ handle_call({get_replication_persistence_checkpoint_id, VBucket},
             {ok, NewOpenCheckpointId, _LastPersistedCkpt} = ns_memcached:create_new_checkpoint(Bucket, VBucket),
             ?log_debug("After creating new checkpoint here's what we have: ~p", [{PersistedCheckpointId, OpenCheckpointId, NewOpenCheckpointId}]),
             {reply, erlang:min(PersistedCheckpointId + 1, NewOpenCheckpointId - 1), State}
-    end.
+    end;
+handle_call({get_tap_docs_estimate, VBucketId, TapName}, _From, #state{bucket_name = Bucket} = State) ->
+    {reply, ns_memcached:get_tap_docs_estimate(Bucket, VBucketId, TapName), State}.
+
 
 handle_cast(_, _State) ->
     erlang:error(cannot_do).

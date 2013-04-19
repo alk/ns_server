@@ -33,19 +33,41 @@
 -record(move_state, {vbucket :: vbucket_id(),
                      before_chain :: [node()],
                      after_chain :: [node()],
-                     vbucket_to_docs_count :: dict(),
                      stats :: [#replica_building_stats{}]}).
 
 -record(state, {bucket :: bucket_name() | undefined,
-                current_moves :: [#move_state{}]
+                vbucket_to_docs_count :: dict(),
+                done_moves :: [#move_state{}],
+                current_moves :: [#move_state{}],
+                pending_moves :: [#move_state{}]
                }).
 
 start_link() ->
     gen_server:start_link(?MODULE, [], []).
 
+is_interesting_master_event({_, set_ff_map, _BucketName, _Diff}) -> true;
+is_interesting_master_event({_, bucket_rebalance_started, _BucketName, _Pid}) -> true;
+is_interesting_master_event({_, vbucket_move_start, _Pid, _BucketName, _Node, _VBucketId, _, _}) -> true;
+is_interesting_master_event({_, vbucket_move_done, _BucketName, _VBucketId}) -> true
+
+
 init([]) ->
+    Self = self(),
+    ns_pubsub:subscribe_link(master_activity_events,
+                             fun (Event, _Ignored) ->
+                                     case is_interesting_master_event(Event) of
+                                         true ->
+                                             gen_server:cast(Self, {note, Event});
+                                         _ ->
+                                             []
+                                     end
+                             end, []),
+
     {ok, #state{bucket = undefined,
-                current_moves = []}}.
+                vbucket_to_docs_count = dict:new(),
+                done_moves  = [],
+                current_moves = [],
+                pending_moves = []}}.
 
 handle_call(Req, From, State) ->
     ?log_error("Got unknown request: ~p from ~p", [Req, From]),
