@@ -58,7 +58,9 @@
          complete_flush/3,
          get_replication_persistence_checkpoint_id/4,
          wait_checkpoint_persisted/5,
-         get_tap_docs_estimate/4]).
+         get_tap_docs_estimate/4,
+         get_tap_docs_estimate_many_taps/4,
+         get_mass_tap_docs_estimate/3]).
 
 -export([start_link/1, wait_for_memcached_new_style/4]).
 
@@ -498,10 +500,42 @@ wait_checkpoint_persisted(Bucket, Rebalancer, Node, VBucket, WaitedCheckpointId)
                          {if_rebalance, Rebalancer, {wait_checkpoint_persisted, VBucket, WaitedCheckpointId}},
                          infinity).
 
-get_tap_docs_estimate(Bucket, Node, VBucket, TapName) ->
-    ok = gen_server:call({server_name(Bucket), Node},
-                         {get_tap_docs_estimate, VBucket, TapName},
-                         infinity).
+initiate_servant_call(Server, Request) ->
+    {ServantPid, Tag} = gen_server:call(Server, Request, infinity),
+    MRef = erlang:monitor(process, ServantPid),
+    {MRef, Tag}.
+
+get_servant_call_reply({MRef, Tag}) ->
+    receive
+        {'DOWN', MRef, _, _, Reason} ->
+            receive
+                {Tag, Reply} ->
+                    Reply
+            after 0 ->
+                    erlang:error({janitor_agent_servant_died, Reason})
+            end
+    end.
+
+do_servant_call(Server, Request) ->
+    get_servant_call_reply(initiate_servant_call(Server, Request)).
+
+get_tap_docs_estimate(Bucket, SrcNode, VBucket, TapName) ->
+    RV = do_servant_call({server_name(Bucket), SrcNode},
+                         {get_tap_docs_estimate, VBucket, TapName}),
+    {ok, _} = RV,
+    RV.
+
+%% TODO: careful with not my vbucket here as well
+-spec get_tap_docs_estimate_many_taps(bucket_name(), node(), vbucket_id(), [binary()]) -> [{ok, non_neg_integer()}].
+get_tap_docs_estimate_many_taps(Bucket, SrcNode, VBucket, TapNames) ->
+    do_servant_call({server_name(Bucket), SrcNode},
+                    {get_tap_docs_estimate_many_taps, VBucket, TapNames}).
+
+get_mass_tap_docs_estimate(Bucket, Node, VBuckets) ->
+    RV = do_servant_call({server_name(Bucket), Node},
+                         {get_mass_tap_docs_estimate, VBuckets}),
+    {ok, _} = RV,
+    RV.
 
 mass_prepare_flush(Bucket, Nodes) ->
     {Replies, BadNodes} = gen_server:multi_call(Nodes, server_name(Bucket), prepare_flush, ?PREPARE_FLUSH_TIMEOUT),
@@ -689,8 +723,31 @@ handle_call({get_replication_persistence_checkpoint_id, VBucket},
             ?log_debug("After creating new checkpoint here's what we have: ~p", [{PersistedCheckpointId, OpenCheckpointId, NewOpenCheckpointId}]),
             {reply, erlang:min(PersistedCheckpointId + 1, NewOpenCheckpointId - 1), State}
     end;
-handle_call({get_tap_docs_estimate, VBucketId, TapName}, _From, #state{bucket_name = Bucket} = State) ->
-    {reply, ns_memcached:get_tap_docs_estimate(Bucket, VBucketId, TapName), State}.
+handle_call({get_tap_docs_estimate, _VBucketId, _TapName} = Req, From, State) ->
+    handle_call_via_servant(
+      From, State, Req,
+      fun ({_, VBucketId, TapName}, #state{bucket_name = Bucket}) ->
+              ns_memcached:get_tap_docs_estimate(Bucket, VBucketId, TapName)
+      end);
+handle_call({get_tap_docs_estimate_many_taps, _VBucketId, _TapName} = Req, From, State) ->
+    handle_call_via_servant(
+      From, State, Req,
+      fun ({_, VBucketId, TapNames}, #state{bucket_name = Bucket}) ->
+              [ns_memcached:get_tap_docs_estimate(Bucket, VBucketId, Name)
+               || Name <- TapNames]
+      end);
+handle_call({get_mass_tap_docs_estimate, VBucketsR}, From, State) ->
+    handle_call_via_servant(
+      From, State, VBucketsR,
+      fun (VBuckets, #state{bucket_name = Bucket}) ->
+              ns_memcached:get_mass_tap_docs_estimate(Bucket, VBuckets)
+      end).
+
+handle_call_via_servant({_, Tag} = From, State, Req, Body) ->
+    Pid = proc_lib:spawn(fun () ->
+                                 gen_server:reply(From, Body(Req, State))
+                         end),
+    {reply, {Pid, Tag}, State}.
 
 
 handle_cast(_, _State) ->

@@ -114,7 +114,8 @@
          create_new_checkpoint/2,
          eval/2,
          wait_for_checkpoint_persistence/3,
-         get_tap_docs_estimate/3]).
+         get_tap_docs_estimate/3,
+         get_mass_tap_docs_estimate/2]).
 
 -include("mc_constants.hrl").
 -include("mc_entry.hrl").
@@ -316,6 +317,7 @@ assign_queue({delete, _Key, _VBucket, _CAS}) -> #state.heavy_calls_queue;
 assign_queue({set, _Key, _VBucket, _Value}) -> #state.heavy_calls_queue;
 assign_queue({update_with_rev, _Key, _VBucket, _Value, _Meta, _Deleted, _LocalCAS}) -> #state.heavy_calls_queue;
 assign_queue({sync, _Key, _VBucket, _CAS}) -> #state.very_heavy_calls_queue;
+assign_queue({get_mass_tap_docs_estimate, _VBuckets}) -> #state.very_heavy_calls_queue;
 assign_queue(_) -> #state.fast_calls_queue.
 
 queue_to_counter_slot(#state.very_heavy_calls_queue) -> #state.running_very_heavy;
@@ -524,6 +526,8 @@ do_handle_call({stats, Key}, _From, State) ->
     {reply, Reply, State};
 do_handle_call({get_tap_docs_estimate, VBucketId, TapName}, _From, State) ->
     {reply, mc_client_binary:get_tap_docs_estimate(State#state.sock, VBucketId, TapName), State};
+do_handle_call({get_mass_tap_docs_estimate, VBuckets}, _From, State) ->
+    {reply, mc_client_binary:get_mass_tap_docs_estimate(State#state.sock, VBuckets), State};
 do_handle_call(topkeys, _From, State) ->
     Reply = mc_binary:quick_stats(
               State#state.sock, <<"topkeys">>,
@@ -1291,3 +1295,6 @@ wait_for_checkpoint_persistence(Bucket, VBucketId, CheckpointId) ->
 -spec get_tap_docs_estimate(bucket_name(), vbucket_id(), binary()) -> {ok, non_neg_integer()}.
 get_tap_docs_estimate(Bucket, VBucketId, TapName) ->
     do_call(server(Bucket), {get_tap_docs_estimate, VBucketId, TapName}, ?TIMEOUT).
+
+get_mass_tap_docs_estimate(Bucket, VBuckets) ->
+    do_call(server(Bucket), {get_mass_tap_docs_estimate, VBuckets}, ?TIMEOUT_VERY_HEAVY).

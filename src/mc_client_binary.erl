@@ -55,7 +55,8 @@
          enable_traffic/1,
          disable_traffic/1,
          wait_for_checkpoint_persistence/3,
-         get_tap_docs_estimate/3
+         get_tap_docs_estimate/3,
+         get_mass_tap_docs_estimate/2
         ]).
 
 -type recv_callback() :: fun((_, _, _) -> any()) | undefined.
@@ -841,7 +842,14 @@ get_tap_docs_estimate(Sock, VBucket, TapName) ->
     mc_binary:quick_stats(Sock,
                           iolist_to_binary([<<"tap-vbtakeover ">>, integer_to_list(VBucket), $\s | TapName]),
                           fun (<<"estimate">>, V, _) ->
-                                  binary_to_list(list_to_integer(V));
+                                  list_to_integer(binary_to_list(V));
                               (_, _, Acc) ->
                                   Acc
                           end, 0).
+
+get_mass_tap_docs_estimate(Sock, VBuckets) ->
+    %% TODO: consider pipelining that stuff. For now it just does
+    %% vbucket after vbucket sequentially
+    {ok, [case get_tap_docs_estimate(Sock, VB, <<"dummy">>) of
+              {ok, V} -> V
+          end || VB <- VBuckets]}.

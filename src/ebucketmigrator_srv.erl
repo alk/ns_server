@@ -661,10 +661,10 @@ do_note_tap_stats(#state{upstream_aux = Aux,
     VB = hd(sets:to_list(VBs)),
     case (catch mc_client_binary:get_tap_docs_estimate(Aux, VB, TapName)) of
         {ok, Estimate} ->
-            (catch master_activity_events:note_tap_stats(NoteTapTag, Estimate));
+            (catch master_activity_events:note_tap_stats(NoteTapTag, Estimate, self(), TapName));
         Error ->
             ?rebalance_error("Failed to get tap docs estimate: ~p~n~p", [Error, erlang:get_stacktrace()]),
-            (catch master_activity_events:note_tap_stats(NoteTapTag, 0))
+            (catch master_activity_events:note_tap_stats(NoteTapTag, 0, self(), TapName))
     end.
 
 upstream_sender_loop(Upstream) ->
