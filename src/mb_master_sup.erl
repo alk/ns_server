@@ -43,6 +43,8 @@ init([]) ->
 child_specs() ->
     [{ns_orchestrator, {ns_orchestrator, start_link, []},
       permanent, 20, worker, [ns_orchestrator]},
+     {ns_rebalance_observer, {ns_rebalance_observer, start_link, []},
+      permanent, 20, worker, []},
      {ns_tick, {ns_tick, start_link, []},
       permanent, 10, worker, [ns_tick]},
      {auto_failover, {auto_failover, start_link, []},

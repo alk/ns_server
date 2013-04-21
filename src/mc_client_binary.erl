@@ -847,6 +847,7 @@ get_tap_docs_estimate(Sock, VBucket, TapName) ->
                                   Acc
                           end, 0).
 
+-spec get_mass_tap_docs_estimate(port(), [vbucket_id()]) -> {ok, [non_neg_integer()]}.
 get_mass_tap_docs_estimate(Sock, VBuckets) ->
     %% TODO: consider pipelining that stuff. For now it just does
     %% vbucket after vbucket sequentially
