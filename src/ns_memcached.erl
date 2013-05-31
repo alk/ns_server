@@ -115,7 +115,8 @@
          eval/2,
          wait_for_checkpoint_persistence/3,
          get_tap_docs_estimate/3,
-         get_mass_tap_docs_estimate/2]).
+         get_mass_tap_docs_estimate/2,
+         kill_a_bunch_of_tap_names/3]).
 
 -include("mc_constants.hrl").
 -include("mc_entry.hrl").
@@ -138,7 +139,7 @@ init(Bucket) ->
     ?log_debug("Starting ns_memcached"),
     Q = queue:new(),
     WorkersCount = case ns_config:search_node(ns_memcached_workers_count) of
-                       false -> 4;
+                       false -> 72;
                        {value, DefinedWorkersCount} ->
                            DefinedWorkersCount
                    end,
@@ -261,10 +262,10 @@ handle_call(sync_bucket_config = Msg, _From, State) ->
     StartTS = os:timestamp(),
     handle_info(check_config, State),
     verify_report_long_call(StartTS, StartTS, State, Msg, {reply, ok, State});
-handle_call({wait_for_checkpoint_persistence, VBucket, CheckpointId}, From, State) ->
-    proc_lib:spawn_link(erlang, apply, [fun perform_wait_for_checkpoint_persistence/5,
-                                        [self(), VBucket, CheckpointId, From, State]]),
-    {noreply, State};
+%% handle_call({wait_for_checkpoint_persistence, VBucket, CheckpointId}, From, State) ->
+%%     proc_lib:spawn_link(erlang, apply, [fun perform_wait_for_checkpoint_persistence/5,
+%%                                         [self(), VBucket, CheckpointId, From, State]]),
+%%     {noreply, State};
 handle_call(Msg, From, State) ->
     StartTS = os:timestamp(),
     NewState = queue_call(Msg, From, StartTS, State),
@@ -298,11 +299,11 @@ verify_report_long_call(StartTS, ActualStartTS, State, Msg, RV) ->
     end.
 
 %% for wait_for_checkpoint_persistence we just always establish new connection
-perform_wait_for_checkpoint_persistence(Parent, VBucket, CheckpointId, From, State0) ->
-    #state{sock = Sock} = do_worker_init(State0),
-    RV = mc_client_binary:wait_for_checkpoint_persistence(Sock, VBucket, CheckpointId),
-    erlang:unlink(Parent),
-    gen_server:reply(From, RV).
+%% perform_wait_for_checkpoint_persistence(Parent, VBucket, CheckpointId, From, State0) ->
+%%     #state{sock = Sock} = do_worker_init(State0),
+%%     RV = mc_client_binary:wait_for_checkpoint_persistence(Sock, VBucket, CheckpointId),
+%%     erlang:unlink(Parent),
+%%     gen_server:reply(From, RV).
 
 %% anything effectful is likely to be heavy
 assign_queue({delete_vbucket, _}) -> #state.very_heavy_calls_queue;
@@ -318,6 +319,7 @@ assign_queue({set, _Key, _VBucket, _Value}) -> #state.heavy_calls_queue;
 assign_queue({update_with_rev, _Key, _VBucket, _Value, _Meta, _Deleted, _LocalCAS}) -> #state.heavy_calls_queue;
 assign_queue({sync, _Key, _VBucket, _CAS}) -> #state.very_heavy_calls_queue;
 assign_queue({get_mass_tap_docs_estimate, _VBuckets}) -> #state.very_heavy_calls_queue;
+assign_queue({wait_for_checkpoint_persistence, _VBucket, _CheckpointId}) -> #state.heavy_calls_queue;
 assign_queue(_) -> #state.fast_calls_queue.
 
 queue_to_counter_slot(#state.very_heavy_calls_queue) -> #state.running_very_heavy;
@@ -398,7 +400,8 @@ try_deliver_work(State, From, RestFroms, QueueSlot) ->
             erlang:setelement(QueueSlot, State3, queue:tail(Q))
     end.
 
-
+do_handle_call({wait_for_checkpoint_persistence, VBucket, CheckpointId}, _From, State) ->
+    {reply, mc_client_binary:wait_for_checkpoint_persistence(State#state.sock, VBucket, CheckpointId), State};
 do_handle_call({raw_stats, SubStat, StatsFun, StatsFunState}, _From, State) ->
     try mc_binary:quick_stats(State#state.sock, SubStat, StatsFun, StatsFunState) of
         Reply ->
@@ -1316,3 +1319,9 @@ get_tap_docs_estimate(Bucket, VBucketId, TapName) ->
 
 get_mass_tap_docs_estimate(Bucket, VBuckets) ->
     do_call(server(Bucket), {get_mass_tap_docs_estimate, VBuckets}, ?TIMEOUT_VERY_HEAVY).
+
+kill_a_bunch_of_tap_names(Bucket, Node, TapNames) ->
+    misc:parallel_map(
+      fun (Name) ->
+              do_call({server(Bucket), Node}, {deregister_tap_client, Name}, ?TIMEOUT_HEAVY)
+      end, TapNames, ?TIMEOUT_VERY_HEAVY).

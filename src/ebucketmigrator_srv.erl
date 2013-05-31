@@ -39,9 +39,9 @@
                        waiters = [] :: list()}).
 
 -record(state, {upstream :: port(),
-                upstream_aux :: port(),
+                upstream_aux :: port() | undefined,
                 downstream :: port(),
-                downstream_aux :: port(),
+                downstream_aux :: port() | undefined,
                 upstream_sender :: pid(),
                 upbuf = <<>> :: binary(),
                 downbuf = <<>> :: binary(),
@@ -546,7 +546,12 @@ init({Src, Dst, Opts}=InitArgs) ->
         case OldState =:= undefined orelse
             OldState#state.upstream =:= undefined of
             true ->
-                Upstream0 = connect(Src, Username, Password, Bucket),
+                Upstream0 = case proplists:get_bool(no_aux_sockets, Opts) of
+                                true ->
+                                    UpstreamAux;
+                                _ ->
+                                    connect(Src, Username, Password, Bucket)
+                            end,
                 %% TCP_NODELAY on upstream socket seems
                 %% beneficial. Only ack/nack is getting sent here.
                 ok = inet:setopts(Upstream0, [{nodelay, true}]),
@@ -590,7 +595,12 @@ init({Src, Dst, Opts}=InitArgs) ->
     Downstream =
         case OldState of
             undefined ->
-                connect(Dst, Username, Password, Bucket);
+                case proplists:get_bool(no_aux_sockets, Opts) of
+                    true ->
+                        DownstreamAux;
+                    _ ->
+                        connect(Dst, Username, Password, Bucket)
+                end;
             _ ->
                 OldState#state.downstream
         end,
@@ -613,11 +623,18 @@ init({Src, Dst, Opts}=InitArgs) ->
                  OldState#state.downbuf}
         end,
 
+    {UsedUpstreamAux, UsedDownstreamAux} = case proplists:get_bool(no_aux_sockets, Opts) of
+                                               true ->
+                                                   {undefined, undefined};
+                                               _ ->
+                                                   {UpstreamAux, DownstreamAux}
+                                           end,
+
     State = #state{
       upstream=Upstream,
-      upstream_aux=UpstreamAux,
+      upstream_aux=UsedUpstreamAux,
       downstream=Downstream,
-      downstream_aux=DownstreamAux,
+      downstream_aux=UsedDownstreamAux,
       upstream_sender=UpstreamSender,
       vbuckets=sets:from_list(ReadyVBuckets),
       last_seen=now(),
