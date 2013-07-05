@@ -1,0 +1,271 @@
+how rebalance works circa 2.1.0 release
+----------------------------------------
+
+
+Master node
+------------
+
+Among cluster nodes one is elected as master. See mb_master module for
+details. Election is currently quite naive and easily seen as not 100%
+bulletproof. Particularly it does not guarantee that _at most 1_
+master is active at a time. In fact "one at a time" is in many ways
+weakly defined concept in distributed system.
+
+Master node starts few services that have to be run once. We call them
+"singleton services". And there's "second line of defence" from "one
+at a time" issue above, that those services are registered in erlang
+global naming facility which also ensures that there's only one
+process registered under given name in "cluster" (connected set of
+nodes, strictly speaking; i.e. under network partition, every "half"
+runs it's own singleton services).
+
+Here's list of singleton services (be sure to check
+ns-server-hierarchy.txt as well):
+
+* ns_orchestrator
+
+* ns_tick
+
+* auto_failover
+
+ns_tick is related to stats and is irrelevant for the purpose of this
+discussion.
+
+auto_failover is the guy who keeps track of live-ness of all other
+nodes and decides if and when autofailover should happen. It's
+discussion is also outside of scope of this text.
+
+ns_orchestrator is cental coordination service. It does (end therefore
+serializes all this things):
+
+* bucket creation
+
+* bucket deletion
+
+* "janitoring" (activating vbuckets and spawning/restoring
+  replications to match vbucket map)
+
+* rebalance (main topic of this text)
+
+* failover
+
+So rebalance starts as call to ns_orchestrator. Note that because
+ns_orchestrator is globally registered name, any node may call it. So
+UI or REST layer of any node may initiate rebalance or failover or
+anything.
+
+ns_orchestrator is actually gen_fsm. What this means is that it can be
+in one of several states. One of this states is idle and other is
+rebalancing. The idea is we want it to bounce e.g. bucket creation
+requests during rebalance, rather than queuing all of them while
+rebalance happens.
+
+And when rebalance happens actual rebalance orchestration is done in
+child of ns_orchestrator.
+
+So when rebalance call arrives in idle state, it spawns rebalancer
+process and remembers it's pid and switches to state rebalancing. And
+actual work happens in rebalancer.
+
+See ns_rebalancer:rebalance/3 for actual code that runs rebalance.
+
+
+
+
+High level outline of rebalance
+---------------------------------
+
+ns_rebalancer:rebalance/3 receives list of nodes to keep (or balance
+in), list of nodes to rebalance out, and list of nodes that are
+already failed over and which will also be rebalanced out. And does
+the following in order:
+
+* synchronize config with remote nodes and waiting until all bucket
+  deletions on those remote nodes are done. This is important for
+  to-be-added nodes. In case they're about to delete buckets that
+  we're about to create back, we want them to complete those deletions
+  so that if node is to-be-added it starts with empty bucket.
+
+* it starts cleanup of dead files (past bucket) on all nodes. This is
+  due to quite tricky and subtle thing. I.e. we're trying to preserve
+  data files on failover and rebalance out just in case, but if
+  rebalance-back-in happens we actually have to get rid of those files
+  somewhere. So this is the place.
+
+* failed over and rebalanced out nodes are ejected immediately. They
+  don't have any vbuckets (because the are failed over) and we don't
+  need to rebalance-back-in them too.
+
+* it iterates over buckets and does per-bucket rebalance (described
+  below). So we only rebalance one bucket at a time. It should be
+  noted that memcached buckets are actually not rebalanced (because
+  they do not support tap). Instead for them we just update list of
+  servers. Actual rebalance _only applies for couchbase buckets_.
+
+* after we're done rebalancing all buckets we carefully eject
+  rebalanced out nodes
+
+
+Bucket rebalance
+------------------
+
+Bucket rebalance starts with adding to-be-added nodes to list of
+bucket servers. Because each nodes observes this lists, to-be-added
+nodes will spot this and will create bucket instances on their
+memcacheds.
+
+We then wait until all nodes have bucket ready. This happens via
+janitor_agent:query_states. And notably on separate process, which is
+done in order to anticipate stop message from ns_orchestrator while
+janitor_agent:query_states is doing it's waiting.
+
+We then run ns_janitor:cleanup/2 (or which is often called just
+janitor because it's main and only entry point). Which ensures that
+all vbucket states and replications match current vbucket map. Also if
+
+Further single bucket rebalance happens in ns_rebalancer:rebalance/5
+(note different arity compared to rebalance/3). Which starts with
+generating target vbucket map (which is it's own interesting
+topic). And target vbucket map is immediately set as fast-forward map.
+
+It then spawns ns_vbucket_mover instance and passed it bucket name,
+current and target maps. And merely waits for it (anticipating stop
+rebalance message from parent too).
+
+See ns_vbucket_mover module which is a gen_server.
+
+
+ns_vbucket_mover
+------------------
+
+Job of ns_vbucket_mover is to orchestrate move of vbuckets that need
+to be moved. Any vbucket map row that differs between current map and
+target map is considered a move. I.e. if master node for vbucket is
+same, but replicas differ, we still consider it a move.
+
+Actual moves are done in childs of this guy in module
+ns_single_vbucket_mover. So ns_vbucket_mover only orchestrates overall
+process while making sure our limits are respected. One such limit is
+1 tap backfill (tap backfill is replication of majority of data) in or
+out of any node.
+
+ns_vbucket_mover maintains list of moves that it still need to do and
+it also tracks currently running moves. And at any given time it may
+want to start some or one of them. The logic of what move(s) to start
+out of all possible moves is implemented in vbucket_move_scheduler
+(this is new code that appeared in 2.0.1).
+
+Once current vbucket move is complete ns_vbucket_mover asks
+vbucket_move_scheduler what is next move to start. And it generally
+spends most of its life waiting for individual vbucket movers.
+
+When all vbucket moves are done ns_vbucket_mover exits.
+
+It also anticipates shutdown request from parent and it performs it by
+first killing all it's childs (synchronously) and then exiting.
+
+
+High level actions of single vbucket move
+-------------------------------------------
+
+Since 2.0 and 2.0.1 we're not just moving data, but we also
+orchestrate index state transitions during vbucket moves. And we also
+control index compactions during rebalance. So it's logical to start
+describing per-vbucket move actions with higher-level description what
+is needed and why.
+
+== "B-superstar" index
+
+I believe some description of what happens with indexes is important
+to have before we can dig into our index management actions.
+
+At the time of this writing (just after 2.1.0 and before 2.2.0 and
+afaik this is not going to change at least until after 3.0.0) our
+indexing is organized as follows. Index is sharded in exactly same way
+as data. I.e. for every data vbucket there's corresponding index
+"vbucket" that has all k-v pairs emitted from it's map functions for
+documents of it's data vbucket _and only for documents of it's data
+vbucket_.
+
+At query time we have to merge index replies from all index
+shards. This is done as part of view engine so does not concern us
+much.
+
+However early on, when we actually had index file per vbucket we found
+that this index merging of many indexes is not very fast. So folks
+decided to combine all index shards on any given node into one
+combined/merged index file. Which is much faster at query time because
+it avoids excessively wide index merges (<result rows count> * O(log
+<index partitions count>)).
+
+However during rebalance vbuckets move and despite those moves index
+querying must still work. And that requires us to always merge all
+index partitions and in a way where each vbucket occurs _exactly
+once_ (no more, no less).
+
+In order to fix this issue folks devised quite sophisticated ways to
+incrementally add and remove vbuckets into combined "superstar" index.
+
+Basically for all index rows it keeps track of it's vbucket and it
+also maintains list of vbuckets that are active, passive and
+cleanup. When request arrives only active vbuckets are queried. It
+actually filters out index rows that do not belong to active vbuckets
+(note that it breaks fast couchdb-style reductions). Passive vbuckets
+is vbuckets for which index is being built but is not yet
+complete. And cleanup vbuckets is vbuckets which are being removed
+from index. And basic idea is we can keep quering some set of vbuckets
+while another set of vbuckets is being added-to/removed-from index.
+
+Now assume we're moving vbucket 10 from node A to node B. Before move,
+10 is part of active vbuckets on A and does not exist in indexes of
+B. And as soon as some data of vbucket 10 is available on B (as
+replica) it is added to B's index as passive. So while indexing and
+data replication of 10 on B continues we continue querying 10 on A and
+queries hitting B ignore 10 (because it's passive yet). Once
+replication and index of vbucket 10 on B is complete we can "switch"
+owner of vbucket 10 in index. Details will be given below but
+basically we active 10 on B and we remove 10 on A (which puts it into
+cleanup state).
+
+Another complicating aspect is replica indexes. But I'll leave this
+subject for another text. See code of capi_set_view_manager and
+janitor_agent for some details.
+
+== Effect of vbucket moves on index compaction
+
+HERE
+
+ns_single_vbucket_mover
+-------------------------
+
+
+vbucket_move_scheduler
+------------------------
+
+When its time to start next move this module decides which of many
+potential and remaining moves to do first.
+
+It honors our limits:
+
+* only 1 backfill at a time
+
+* and forced view compaction on a node each 16 moves in-to/out-of it
+
+And within that limits we still frequently have plenty of potential
+moves to pick from. So there's simple heuristics that tries to do
+better than just picking random move out of possible moves.
+
+HERE
+
+
+1.8.x backwards compatibility
+-------------------------------
+
+
+cluster orchestration guts: janitor_agent
+-------------------------------------------
+
+
+cluster orchestration guts: capi_set_view_manager
+---------------------------------------------------
+
