@@ -242,6 +242,8 @@ loop_inner(Req, AppRoot, DocRoot, Path, PathTokens) ->
                              {auth_ro, fun handle_settings_view_update_daemon/1};
                          ["settings", "autoCompaction"] ->
                              {auth_ro, fun handle_settings_auto_compaction/1};
+                         ["settings", "replications", XID] ->
+                             {auth_ro, fun menelaus_web_xdc_replications:handle_replication_settings/2, [XID]};
                          ["internalSettings"] ->
                              {auth, fun handle_internal_settings/1};
                          ["nodes", NodeId] ->
@@ -321,6 +323,8 @@ loop_inner(Req, AppRoot, DocRoot, Path, PathTokens) ->
                              {auth, fun handle_settings_view_update_daemon_post/1};
                          ["settings", "readOnlyUser"] ->
                              {auth, fun handle_settings_read_only_user_post/1};
+                         ["settings", "replications", XID] ->
+                             {auth, fun menelaus_web_xdc_replications:handle_replication_settings_post/2, [XID]};
                          ["internalSettings"] ->
                              {auth, fun handle_internal_settings_post/1};
                          ["pools", PoolId] ->
