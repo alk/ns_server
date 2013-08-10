@@ -327,7 +327,8 @@
           time_connected,
           time_init,
           error_reports,
-          local_conflict_resolution
+          local_conflict_resolution,
+          connection_timeout
          }).
 
 
