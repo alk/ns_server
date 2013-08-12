@@ -26,7 +26,7 @@
 -export([get_opt_replication_threshold/0]).
 -export([update_options/1, get_checkpoint_mode/0]).
 -export([get_replication_mode/0, get_replication_batch_size/0]).
--export([is_pipeline_enabled/0, get_trace_dump_invprob/0]).
+-export([is_pipeline_enabled/0]).
 -export([get_xmem_worker/0, is_local_conflict_resolution/0]).
 
 -include("xdc_replicator.hrl").
@@ -443,14 +443,6 @@ is_pipeline_enabled() ->
         _ ->
             EnablePipeline
     end.
-
-%% inverse probability to dump non-critical datapath trace,
-%% trace will be dumped by probability 1/N
--spec get_trace_dump_invprob() -> integer().
-get_trace_dump_invprob() ->
-    %% env parameter can override the ns_config parameter
-    {value, DefInvProb} = ns_config:search(xdcr_trace_dump_inverse_prob),
-    misc:getenv_int("XDCR_TRACE_DUMP_INVERSE_PROB", DefInvProb).
 
 -spec get_xmem_worker() -> integer().
 get_xmem_worker() ->

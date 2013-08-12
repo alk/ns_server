@@ -76,6 +76,17 @@ init(_) ->
     %% monitor replication doc change
     {Loop, <<"_replicator">> = RepDbName} = changes_feed_loop(),
 
+    Self = self(),
+    ns_pubsub:subscribe_link(ns_config_events,
+                             fun ({xdcr_enable_extra_debug, _} = M) ->
+                                     Self ! M;
+                                 (_) ->
+                                     ok
+                             end),
+    ExtraDebugLoggerEnabled = ns_config:search('latest-config-marker',
+                                               xdcr_enable_extra_debug, false),
+    adjust_extra_debug_logger(ExtraDebugLoggerEnabled),
+
     {ok, #rep_db_state{
        changes_feed_loop = Loop,
        rep_db_name = RepDbName
@@ -145,6 +156,9 @@ handle_cast(Msg, State) ->
     {stop, {error, {unexpected_cast, Msg}}, State}.
 
 
+handle_info({xdcr_enable_extra_debug, Enable}, State) ->
+    adjust_extra_debug_logger(Enable),
+    {noreply, State};
 handle_info(Msg, State) ->
     %% Ignore any other messages but log them
     ?xdcr_info("ignoring unexpected message: ~p", [Msg]),
@@ -156,6 +170,15 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+adjust_extra_debug_logger(Enable) ->
+    LogLevel = case Enable of
+                   true ->
+                       debug;
+                   _ ->
+                       warn
+               end,
+    ale:set_loglevel(?XDCR_DEBUG_LOGGER, LogLevel).
 
 process_update({Change}, State) ->
     DocDeleted = get_value(<<"deleted">>, Change, false),

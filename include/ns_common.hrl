@@ -57,6 +57,7 @@
 -define(DEBUG_LOG_FILENAME, "debug").
 -define(XDCR_LOG_FILENAME, "xdcr").
 -define(XDCR_ERRORS_LOG_FILENAME, "xdcr_errors").
+-define(XDCR_DEBUG_LOG_FILENAME, "xdcr_debug").
 -define(STATS_LOG_FILENAME, "stats").
 -define(BABYSITTER_LOG_FILENAME, "babysitter").
 
@@ -73,12 +74,13 @@
 %% if you can't find any calls to it in ns_server
 -define(MAPREDUCE_ERRORS_LOGGER, mapreduce_errors).
 -define(XDCR_LOGGER, xdcr).
+-define(XDCR_DEBUG_LOGGER, xdcr_debug).
 
 -define(LOGGERS, [?COUCHDB_LOGGER, ?NS_SERVER_LOGGER,
                   ?USER_LOGGER, ?MENELAUS_LOGGER,
                   ?NS_DOCTOR_LOGGER, ?STATS_LOGGER,
                   ?REBALANCE_LOGGER, ?CLUSTER_LOGGER, ?VIEWS_LOGGER,
-                  ?MAPREDUCE_ERRORS_LOGGER, ?XDCR_LOGGER]).
+                  ?MAPREDUCE_ERRORS_LOGGER, ?XDCR_LOGGER, ?XDCR_DEBUG_LOGGER]).
 
 -define(LOG(Level, Format, Args),
         ale:log(?NS_SERVER_LOGGER, Level, Format, Args)).
@@ -145,6 +147,11 @@
 
 -define(xdcr_error(Format, Args), ale:error(?XDCR_LOGGER, Format, Args)).
 -define(xdcr_error(Msg), ale:error(?XDCR_LOGGER, Msg)).
+
+-define(xdcr_extra_debug(Format, Args),
+        ale:debug(?XDCR_DEBUG_LOGGER, Format, Args)).
+-define(xdcr_extra_debug(Format), ale:debug(?XDCR_DEBUG_LOGGER, Format)).
+
 
 -define(i2l(V), integer_to_list(V)).
 
