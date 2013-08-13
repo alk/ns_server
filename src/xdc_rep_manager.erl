@@ -70,15 +70,8 @@ init(_) ->
     %% monitor replication doc change
     {Loop, <<"_replicator">> = RepDbName} = changes_feed_loop(),
 
-    Self = self(),
-    ns_pubsub:subscribe_link(ns_config_events,
-                             fun ({xdcr_enable_extra_debug, _} = M) ->
-                                     Self ! M;
-                                 (_) ->
-                                     ok
-                             end),
-    ExtraDebugLoggerEnabled = ns_config:search('latest-config-marker',
-                                               xdcr_enable_extra_debug, false),
+    xdc_settings:subscribe_to_global_settings_changes([enable_extra_debug]),
+    ExtraDebugLoggerEnabled = xdc_settings:get_global_setting(enable_extra_debug),
     adjust_extra_debug_logger(ExtraDebugLoggerEnabled),
 
     {ok, #rep_db_state{
@@ -150,7 +143,7 @@ handle_cast(Msg, State) ->
     {stop, {error, {unexpected_cast, Msg}}, State}.
 
 
-handle_info({xdcr_enable_extra_debug, Enable}, State) ->
+handle_info({enable_extra_debug, Enable}, State) ->
     adjust_extra_debug_logger(Enable),
     {noreply, State};
 handle_info(Msg, State) ->
