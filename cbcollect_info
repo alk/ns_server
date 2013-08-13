@@ -358,7 +358,7 @@ def make_product_task(guts, initargs_path):
                    addenv = [("REPORT_DIR", read_guts(guts, "log_path"))],
                    log_file="ns_server.%s.log" % name)
          for name in ["debug", "info", "error", "couchdb",
-                      "xdcr", "xdcr_errors",
+                      "xdcr", "xdcr_errors", "xdcr_debug",
                       "views", "mapreduce_errors",
                       "stats", "babysitter"]],
 
