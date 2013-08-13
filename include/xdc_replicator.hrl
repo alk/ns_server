@@ -145,7 +145,8 @@
 %% batch of documents usd by vb replicator worker process
 -record(batch, {
           docs = [],
-          size = 0
+          size = 0,
+          items = 0
          }).
 
 %% bucket level replication state used by module xdc_replication
@@ -266,7 +267,8 @@
           max_conns,               %% max connections
           xmem_server,             %% XMem server process
           opt_rep_threshold,       %% optimistic replication threshold
-          batch_size               %% batch size (in bytes)
+          batch_size,              %% batch size (in bytes)
+          batch_items              %% batch items
          }).
 
 %% statistics reported from worker process to its parent vbucket replicator
