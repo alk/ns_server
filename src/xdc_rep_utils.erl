@@ -219,8 +219,8 @@ get_checkpoint_mode() ->
     %% always checkpoint to remote capi unless specified by env parameter
     case (catch string:to_lower(os:getenv("XDCR_CHECKPOINT_MODE"))) of
         "xmem" ->
-            ?xdcr_debug("Warning! Different from default CAPI checkpoint, "
-                        "we checkpoint to memcached", []),
+            ?xdcr_info("Warning! Different from default CAPI checkpoint, "
+                       "we checkpoint to memcached", []),
             "xmem";
         _ ->
             "capi"
