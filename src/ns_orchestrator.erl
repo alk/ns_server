@@ -233,8 +233,13 @@ start_recovery(Bucket) ->
                   {recovery_map, RecoveryMap}],
        RecoveryMap :: dict().
 recovery_status() ->
-    wait_for_orchestrator(),
-    gen_fsm:sync_send_all_state_event(?SERVER, recovery_status).
+    case is_recovery_running() of
+        false ->
+            not_in_recovery;
+        _ ->
+            wait_for_orchestrator(),
+            gen_fsm:sync_send_all_state_event(?SERVER, recovery_status)
+    end.
 
 -spec recovery_map(bucket_name(), UUID) -> bad_recovery | {ok, RecoveryMap}
   when RecoveryMap :: dict(),
