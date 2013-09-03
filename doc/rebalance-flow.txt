@@ -1,4 +1,4 @@
-how rebalance works circa 2.1.0 release
+how rebalance works circa 2.2.0 release
 ----------------------------------------
 
 
@@ -11,10 +11,10 @@ bulletproof. Particularly it does not guarantee that _at most 1_
 master is active at a time. In fact "one at a time" is in many ways
 weakly defined concept in distributed system.
 
-Master node starts few services that have to be run once. We call them
+Master node starts few services that has to be run once. We call them
 "singleton services". And there's "second line of defence" from "one
-at a time" issue above, that those services are registered in erlang
-global naming facility which also ensures that there's only one
+at a time" issue mentioned above that those services are registered in
+erlang global naming facility which also ensures that there's only one
 process registered under given name in "cluster" (connected set of
 nodes, strictly speaking; i.e. under network partition, every "half"
 runs it's own singleton services).
@@ -28,15 +28,14 @@ ns-server-hierarchy.txt as well):
 
 * auto_failover
 
-ns_tick is related to stats and is irrelevant for the purpose of this
-discussion.
+ns_tick is related to stats gathing and is irrelevant for the purpose
+of this discussion.
 
 auto_failover is the guy who keeps track of live-ness of all other
 nodes and decides if and when autofailover should happen. It's
 discussion is also outside of scope of this text.
 
-ns_orchestrator is cental coordination service. It does (end therefore
-serializes all this things):
+ns_orchestrator is a cental coordination service. It does:
 
 * bucket creation
 
@@ -48,6 +47,9 @@ serializes all this things):
 * rebalance (main topic of this text)
 
 * failover
+
+By performing those activities through ns_orchestrator we also
+serialize them.
 
 So rebalance starts as call to ns_orchestrator. Note that because
 ns_orchestrator is globally registered name, any node may call it. So
@@ -64,10 +66,10 @@ And when rebalance happens actual rebalance orchestration is done in
 child of ns_orchestrator.
 
 So when rebalance call arrives in idle state, it spawns rebalancer
-process and remembers it's pid and switches to state rebalancing. And
-actual work happens in rebalancer.
+process and remembers it's pid and switches to state
+rebalancing. Actual work happens in rebalancer.
 
-See ns_rebalancer:rebalance/3 for actual code that runs rebalance.
+See ns_rebalancer:rebalance/3 for code that runs rebalance.
 
 
 
