@@ -181,13 +181,12 @@ is needed and why.
 I believe some description of what happens with indexes is important
 to have before we can dig into our index management actions.
 
-At the time of this writing (just after 2.1.0 and before 2.2.0 and
-afaik this is not going to change at least until after 3.0.0) our
-indexing is organized as follows. Index is sharded in exactly same way
-as data. I.e. for every data vbucket there's corresponding index
-"vbucket" that has all k-v pairs emitted from it's map functions for
-documents of it's data vbucket _and only for documents of it's data
-vbucket_.
+At the time of this writing (just before 2.2.0 and afaik this is not
+going to change at least until after 3.0.0) our indexing is organized
+as follows. Index is sharded in exactly same way as data. I.e. for
+every data vbucket there's corresponding index "vbucket" that has all
+k-v pairs emitted from it's map functions for documents of it's data
+vbucket _and only for documents of it's data vbucket_.
 
 At query time we have to merge index replies from all index
 shards. This is done as part of view engine so does not concern us
@@ -200,9 +199,9 @@ combined/merged index file. Which is much faster at query time because
 it avoids excessively wide index merges (<result rows count> * O(log
 <index partitions count>)).
 
-However during rebalance vbuckets move and despite those moves index
-querying must still work. And that requires us to always merge all
-index partitions and in a way where each vbucket occurs _exactly
+However during rebalance vbuckets move and regardless of those moves,
+index querying must still work. And that requires us to always merge
+all index partitions and in a way where each vbucket occurs _exactly
 once_ (no more, no less).
 
 In order to fix this issue folks devised quite sophisticated ways to
@@ -212,8 +211,8 @@ Basically for all index rows it keeps track of it's vbucket and it
 also maintains list of vbuckets that are active, passive and
 cleanup. When request arrives only active vbuckets are queried. It
 actually filters out index rows that do not belong to active vbuckets
-(note that it breaks fast couchdb-style reductions). Passive vbuckets
-is vbuckets for which index is being built but is not yet
+(note that it "breaks" fast couchdb-style reductions). Passive
+vbuckets is vbuckets for which index is being built but is not yet
 complete. And cleanup vbuckets is vbuckets which are being removed
 from index. And basic idea is we can keep quering some set of vbuckets
 while another set of vbuckets is being added-to/removed-from index.
@@ -226,7 +225,7 @@ data replication of 10 on B continues we continue querying 10 on A and
 queries hitting B ignore 10 (because it's passive yet). Once
 replication and index of vbucket 10 on B is complete we can "switch"
 owner of vbucket 10 in index. Details will be given below but
-basically we active 10 on B and we remove 10 on A (which puts it into
+basically we active-ate 10 on B and we remove 10 on A (which puts it into
 cleanup state).
 
 Another complicating aspect is replica indexes. But I'll leave this
