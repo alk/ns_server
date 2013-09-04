@@ -112,18 +112,18 @@ Bucket rebalance
 ------------------
 
 Bucket rebalance starts with adding to-be-added nodes to list of
-bucket servers. Because each nodes observes this lists, to-be-added
-nodes will spot this and will create bucket instances on their
-memcacheds.
+bucket servers. Because each node has code that monitors this lists,
+to-be-added nodes will spot this change and will create bucket
+instances on their memcacheds.
 
 We then wait until all nodes have bucket ready. This happens via
 janitor_agent:query_states. And notably on separate process, which is
 done in order to anticipate stop message from ns_orchestrator while
 janitor_agent:query_states is doing it's waiting.
 
-We then run ns_janitor:cleanup/2 (or which is often called just
-janitor because it's main and only entry point). Which ensures that
-all vbucket states and replications match current vbucket map. Also if
+We then run ns_janitor:cleanup/2 (which is often called just janitor
+because it's main and only entry point). Which ensures that all
+vbucket states and replications match current vbucket map.
 
 Further single bucket rebalance happens in ns_rebalancer:rebalance/5
 (note different arity compared to rebalance/3). Which starts with
