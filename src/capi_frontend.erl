@@ -154,11 +154,6 @@ update_doc(#db{filepath = undefined, name=Name} = Db,
             throw(Error)
     end.
 
-update_docs(Db,
-            [#doc{id = <<?LOCAL_DOC_PREFIX, _Rest/binary>>} = Doc],
-            Options) ->
-    ok = couch_db:update_doc(Db, Doc, Options);
-
 update_docs(#db{filepath = undefined, name = Name}, Docs, _Options) ->
     lists:foreach(fun(#doc{id = <<"_design/",_/binary>>} = Doc) ->
                           case capi_ddoc_replication_srv:update_doc(Name, Doc) of
