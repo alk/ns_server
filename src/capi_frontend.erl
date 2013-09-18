@@ -33,9 +33,6 @@
 not_implemented(Arg, Rest) ->
     {not_implemented, Arg, Rest}.
 
-do_db_req(#httpd{path_parts=[<<"_replicator">>|_]}=Req, Fun) ->
-    %% TODO: AUTH!!!!
-    couch_db_frontend:do_db_req(Req, Fun);
 do_db_req(Req, Fun) ->
     %% it'll just crash if somebody wants to access CAPI in older
     %% compat mode
@@ -116,8 +113,6 @@ get_db_info(#db{filepath = undefined, name = Name}) ->
     Info = [{db_name, Name},
             {instance_start_time, <<>>}],
     {ok, Info};
-get_db_info(#db{name = <<"_replicator">>} = Db) ->
-    couch_db:get_db_info(Db);
 get_db_info(#db{name = DbName}) ->
     [Bucket, _Master] = string:tokens(binary_to_list(DbName), [$/]),
     {ok, Stats0} = ns_memcached:stats(Bucket, <<"">>),
@@ -144,9 +139,6 @@ update_doc(#db{filepath = undefined, name=Name},
         {invalid_design_doc, _Reason} = Error ->
             throw(Error)
     end;
-
-update_doc(#db{name = <<"_replicator">>}, Doc, _Options) ->
-    xdc_rdoc_replication_srv:update_doc(Doc);
 
 update_doc(#db{filepath = undefined, name=Name} = Db,
            #doc{id=DocId} = Doc, Options) ->

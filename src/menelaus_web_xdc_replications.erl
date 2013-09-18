@@ -55,11 +55,8 @@ handle_create_replication(Req) ->
                               misc:expect_prop_value(to_cluster, ParsedParams)])
             end,
 
-            CapiURL = capi_utils:capi_url_bin(node(), <<"/_replicator">>,
-                                              menelaus_util:local_addr(Req)),
             menelaus_util:reply_json(Req,
-                                     {struct, [{database, CapiURL},
-                                               {id, ReplicationDoc#doc.id}]})
+                                     {struct, [{id, ReplicationDoc#doc.id}]})
     end.
 
 handle_cancel_replication(XID, Req) ->
