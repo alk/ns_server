@@ -308,7 +308,7 @@ open_doc(#db{filepath = undefined, name = Name} = Db, DocId, Options) ->
 
 
 task_status_all() ->
-    couch_db_frontend:task_status_all().
+    exit(not_implemented(task_status_all, [])).
 
 restart_core_server() ->
     exit(not_implemented(restart_core_server, [])).
