@@ -304,9 +304,7 @@ open_doc(#db{filepath = undefined, name = Name} = Db, DocId, Options) ->
             throw({503, <<"node_warmup">>, <<"Data is not yet loaded.">>});
         Response ->
             Response
-    end;
-open_doc(Db, DocId, Options) ->
-    couch_db:open_doc(Db, DocId, Options).
+    end.
 
 
 task_status_all() ->
