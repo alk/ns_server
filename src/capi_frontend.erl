@@ -249,9 +249,7 @@ get_group_info(#db{filepath = undefined} = Db, DesignId) ->
     with_subdb(Db, <<"master">>,
                fun (RealDb) ->
                        couch_view:get_group_info(RealDb, DesignId)
-               end);
-get_group_info(Db, DesignId) ->
-    couch_view:get_group_info(Db, DesignId).
+               end).
 
 create_db(DbName, UserCtx) ->
     exit(not_implemented(create_db, [DbName, UserCtx])).
