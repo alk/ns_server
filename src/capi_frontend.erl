@@ -234,9 +234,7 @@ check_is_admin(_Db) ->
     ok.
 
 handle_changes(ChangesArgs, Req, #db{filepath = undefined} = Db) ->
-    exit(not_implemented(handle_changes, [ChangesArgs, Req, Db]));
-handle_changes(ChangesArgs, Req, Db) ->
-    couch_changes:handle_changes(ChangesArgs, Req, Db).
+    exit(not_implemented(handle_changes, [ChangesArgs, Req, Db])).
 
 start_view_compact(DbName, GroupId) ->
     exit(not_implemented(start_view_compact, [DbName, GroupId])).
