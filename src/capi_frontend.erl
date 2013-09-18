@@ -306,6 +306,13 @@ open_doc(#db{filepath = undefined, name = Name} = Db, DocId, Options) ->
             Response
     end.
 
+couch_doc_open(Db, DocId, Options) ->
+    case open_doc(Db, DocId, Options) of
+        {ok, Doc} ->
+            Doc;
+        Error ->
+            throw(Error)
+    end.
 
 task_status_all() ->
     exit(not_implemented(task_status_all, [])).
@@ -324,37 +331,6 @@ stats_aggregator_get_json(Key, Range) ->
 
 stats_aggregator_collect_sample() ->
     exit(not_implemented(stats_aggregator_collect_sample, [])).
-
-couch_doc_open(Db, DocId, Options) ->
-    case open_doc(Db, DocId, Options) of
-        {ok, Doc} ->
-            Doc;
-        Error ->
-            throw(Error)
-    end.
-
-%% Grab the first vbucket we can find on this server
--spec first_vbucket(binary()) -> non_neg_integer().
-first_vbucket(Bucket) ->
-    {ok, Config} = ns_bucket:get_bucket(?b2l(Bucket)),
-    Map = proplists:get_value(map, Config, []),
-    {ok, Index} = first_vbucket(node(), Map, 0),
-    Index.
-
-
--spec first_vbucket(atom(), list(), integer()) ->
-                           {ok, integer()} | {error, no_vbucket_found}.
-first_vbucket(_Node, [], _Acc) ->
-    {error, no_vbucket_found};
-first_vbucket(Node, [[Node|_] | _Rest], I) ->
-    {ok, I};
-first_vbucket(Node, [_First|Rest], I) ->
-    first_vbucket(Node, Rest, I + 1).
-
-has_active_vbuckets(Bucket) ->
-    {ok, Config} = ns_bucket:get_bucket(?b2l(Bucket)),
-    Map = proplists:get_value(map, Config, []),
-    first_vbucket(node(), Map, 0) =/= {error, no_vbucket_found}.
 
 %% Keep the last previous non design doc id found so if the random item
 %% picked was a design doc, return last document, or not_found

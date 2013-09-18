@@ -121,3 +121,26 @@ couch_doc_to_mochi_json(Doc) ->
 
 extract_doc_id(Doc) ->
     Doc#doc.id.
+
+%% Grab the first vbucket we can find on this server
+-spec first_vbucket(binary()) -> non_neg_integer().
+first_vbucket(Bucket) ->
+    {ok, Config} = ns_bucket:get_bucket(?b2l(Bucket)),
+    Map = proplists:get_value(map, Config, []),
+    {ok, Index} = first_vbucket(node(), Map, 0),
+    Index.
+
+
+-spec first_vbucket(atom(), list(), integer()) ->
+                           {ok, integer()} | {error, no_vbucket_found}.
+first_vbucket(_Node, [], _Acc) ->
+    {error, no_vbucket_found};
+first_vbucket(Node, [[Node|_] | _Rest], I) ->
+    {ok, I};
+first_vbucket(Node, [_First|Rest], I) ->
+    first_vbucket(Node, Rest, I + 1).
+
+has_active_vbuckets(Bucket) ->
+    {ok, Config} = ns_bucket:get_bucket(?b2l(Bucket)),
+    Map = proplists:get_value(map, Config, []),
+    first_vbucket(node(), Map, 0) =/= {error, no_vbucket_found}.

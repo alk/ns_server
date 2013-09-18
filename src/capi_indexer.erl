@@ -75,9 +75,9 @@ run_on_subset(#httpd{path_parts=[_, _, DName, _, _]}=Req, Name) ->
         <<"dev_", _/binary>> ->
             case get_value("full_set", (Req#httpd.mochi_req):parse_qs()) =/= "true"
                 andalso run_on_subset_according_to_stats(Name) of
-                true -> capi_frontend:first_vbucket(Name);
+                true -> capi_utils:first_vbucket(Name);
                 false -> full_set;
-                {error, no_stats} -> capi_frontend:first_vbucket(Name)
+                {error, no_stats} -> capi_utils:first_vbucket(Name)
             end;
         _ ->
             full_set
@@ -117,7 +117,7 @@ do_handle_view_req(Mod, Req, DbName, DDocName, ViewName) ->
     end.
 
 when_has_active_vbuckets(Req, Bucket, Fn) ->
-    case capi_frontend:has_active_vbuckets(Bucket) of
+    case capi_utils:has_active_vbuckets(Bucket) of
         true ->
             Fn();
         false ->
