@@ -24,12 +24,6 @@
 -include("mc_entry.hrl").
 -include("mc_constants.hrl").
 
--record(collect_acc, {
-          row_count = undefined,
-          rows = []
-         }).
-
-
 not_implemented(Arg, Rest) ->
     {not_implemented, Arg, Rest}.
 
@@ -331,57 +325,6 @@ stats_aggregator_get_json(Key, Range) ->
 
 stats_aggregator_collect_sample() ->
     exit(not_implemented(stats_aggregator_collect_sample, [])).
-
-%% Keep the last previous non design doc id found so if the random item
-%% picked was a design doc, return last document, or not_found
--spec fold_docs(#doc_info{}, any(), tuple()) -> {ok, any()} | {stop, any()}.
-fold_docs(#doc_info{id = <<"_design", _/binary>>}, _, {0, undefined}) ->
-    {stop, {error, not_found}};
-fold_docs(#doc_info{id = <<"_design", _/binary>>}, _, {0, Id}) ->
-    {stop, Id};
-fold_docs(#doc_info{id = Id}, _, {0, _Id}) ->
-    {stop, Id};
-fold_docs(#doc_info{deleted=true}, _, Acc) ->
-    {ok, Acc};
-fold_docs(_, _, {N, Id}) ->
-    {ok, {N - 1, Id}}.
-
-
-%% Return 404 when no documents are found
--spec no_random_docs(#httpd{}) -> any().
-no_random_docs(Req) ->
-    couch_httpd:send_error(Req, 404, <<"no_docs">>, <<"No documents in database">>).
-
-
--spec setup_sender(#index_merge{}) -> #index_merge{}.
-setup_sender(MergeParams) ->
-    MergeParams#index_merge{
-      user_acc = #collect_acc{},
-      callback = fun collect_ids/2,
-      extra = #view_merge{
-        make_row_fun = fun({{DocId, DocId}, _Value}) -> DocId end
-       }
-     }.
-
-
-%% Colled Id's in the callback of the view merge, ignore design documents
--spec collect_ids(any(), #collect_acc{}) -> any().
-collect_ids(stop, Acc) ->
-    {ok, Acc};
-collect_ids({start, X}, Acc) ->
-    {ok, Acc#collect_acc{row_count=X}};
-collect_ids({row, Id}, #collect_acc{rows=Rows} = Acc) ->
-    case is_design_doc(Id) of
-        true -> {ok, Acc};
-        false -> {ok, Acc#collect_acc{rows=[Id|Rows]}}
-    end.
-
-
--spec is_design_doc(binary()) -> true | false.
-is_design_doc(<<"_design/", _Rest/binary>>) ->
-    true;
-is_design_doc(_) ->
-    false.
 
 -spec get_version() -> string().
 get_version() ->
