@@ -78,14 +78,19 @@ get_replication_topology() ->
     ns_config_ets_dup:unreliable_read_key(replication_topology, star).
 
 is_node_compatible(Node, Version) ->
-    NodeVer = case Node =:= node() of
-                  true ->
-                      mb_master_advertised_version();
-                  false ->
-                      Status = ns_doctor:get_node(Node),
-                      proplists:get_value(advertised_version, Status, [])
-              end,
-    NodeVer >= Version.
+    case is_enabled(Version) of
+        true ->
+            true;
+        _ ->
+            NodeVer = case Node =:= node() of
+                          true ->
+                              mb_master_advertised_version();
+                          false ->
+                              Status = ns_doctor:get_node(Node),
+                              proplists:get_value(advertised_version, Status, [])
+                      end,
+            NodeVer >= Version
+    end.
 
 rebalance_ignore_view_compactions() ->
     ns_config_ets_dup:unreliable_read_key(rebalance_ignore_view_compactions, false).
