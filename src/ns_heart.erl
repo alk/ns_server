@@ -223,6 +223,10 @@ current_status() ->
          {cluster_compatibility_version, ClusterCompatVersion}
          | element(2, ns_info:basic_info())] ++ MaybeMeminfo.
 
+%% undefined is "used" shortly after node is initialized and when
+%% there's no compat mode yet
+effective_cluster_compat_version_for(undefined) ->
+    1;
 effective_cluster_compat_version_for([VersionMaj, VersionMin] = _CompatVersion) ->
     VersionMaj * 16#10000 + VersionMin.
 
