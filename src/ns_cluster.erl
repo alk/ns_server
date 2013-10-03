@@ -674,13 +674,7 @@ do_engage_cluster(NodeKVList) ->
 do_engage_cluster_check_compatibility(NodeKVList) ->
     Version = expect_json_property_binary(<<"version">>, NodeKVList),
     MaybeError = case Version of
-                     <<"1.6.", _/binary>> ->
-                         {error, incompatible_cluster_version,
-                          <<"Joining 1.6 cluster does not work">>,
-                          incompatible_cluster_version};
-                     <<"1.7.2",_/binary>> ->
-                         ok;
-                     <<"1.7.",_/binary>> = Version ->
+                     <<"1.",_/binary>> = Version ->
                          {error, incompatible_cluster_version,
                           iolist_to_binary(io_lib:format("Joining ~s cluster does not work", [Version])),
                           incompatible_cluster_version};
