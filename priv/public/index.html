@@ -2494,6 +2494,7 @@
              to add.
            </span></span>
          </a>
+        </li>
        </ul>
      </fieldset>
      <fieldset>
@@ -2520,7 +2521,7 @@
 <!-- END Create Cluster Reference -->
 
 <!-- Create Replication -->
-<div class="dialog join_cluster" id="create_replication_dialog" title="Create Replication" style="width:600px">
+<div class="dialog join_cluster create_replication_dialog" id="create_replication_dialog" title="Create Replication" style="width:600px">
   <div class="warning pat_10" id="create_replication_dialog_errors_container" style="line-height: 18px;"></div>
   <script id="create_replication_dialog_errors_template" type="text/html">
     <!-- {% _.each(rows, function (e) { %} -->
@@ -2552,6 +2553,10 @@
             <input name="toBucket" id="replication_to_bucket" />
             <!-- TODO: this needs to become a select box like the one above -->
           </li>
+          <li class="ssh_key_area">
+            <label for="ssh_key_area">Certificate:</label>
+            <textarea id="ssh_key_area"></textarea>
+          </li>
         </ul>
       </fieldset>
       <fieldset class="xdcr_advaced_settings" id="js_xdcr_advaced_settings">
@@ -2563,6 +2568,10 @@
               <option value="capi">Version 1</option>
               <option value="xmem" selected="selected">Version 2</option>
             </select>
+          </div>
+          <div class="demand_encryption_flag">
+            <label for="demand_encryption_flag">Demand encryption</label>
+            <input name="demand_encryption" id="demand_encryption_flag" type="checkbox">
           </div>
           <div>
             <label for="max_concurrent_reps">XDCR Max Replications per Bucket:</label>
