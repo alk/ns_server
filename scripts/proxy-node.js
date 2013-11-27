@@ -42,7 +42,7 @@ var proxyOptions = {
 
 function onceOrError(emitter, eventName, callback) {
   function onError(err) {
-    emitter.removeListener(eventName, cb);
+    emitter.removeListener(eventName, onEvent);
     callback(err);
   }
   function onEvent() {
@@ -55,16 +55,17 @@ function onceOrError(emitter, eventName, callback) {
 }
 
 function readGivenLength(c, data, wantedLength, callback) {
+  if (data.length >= wantedLength) {
+    callback(null, data.slice(0, wantedLength), data.slice(wantedLength));
+    return;
+  }
   onceOrError(c, "data", function (err, moreData) {
+    console.log("readGivenLength: got some stuff", err, moreData);
     if (err) {
       return callback(err);
     }
     var nowData = Buffer.concat([data, moreData]);
-    if (nowData.length < wantedLength) {
-      readGivenLength(c, nowData, wantedLength, callback);
-      return;
-    }
-    callback(null, nowData.slice(0, wantedLength), nowData.slice(wantedLength));
+    readGivenLength(c, nowData, wantedLength, callback);
   });
 }
 
@@ -74,13 +75,21 @@ function readPayloadSize(c, data, callback) {
       callback(err);
       return;
     }
-    callback(null, lengthBuf.readUInt32BE(0), rest);
+    var length = lengthBuf.readUInt32BE(0);
+    console.log("Got length. Reading rest: ", length, rest);
+    callback(null, length, rest);
   });
 }
 
 function tcpConnect(host, port, callback) {
-  var c = net.createConnection(host, port, {halfOpen: true});
-  onceOrError(c, "connected", callback);
+  var c = new net.Socket({halfOpen: true});
+  c.connect(port, host);
+  onceOrError(c, "connect", function (err) {
+    if (err) {
+      return callback(err);
+    }
+    return callback(null, c);
+  });
 }
 
 
@@ -90,11 +99,16 @@ function sendPayload(socket, payload, callback, isEnd) {
   b0.writeUInt32BE(b1.length, 0);
   var b = Buffer.concat([b0, b1]);
   if (isEnd) {
-    socket.end(b);
     onceOrError(socket, "finish", callback);
+    socket.end(b);
   } else {
-    socket.write(b);
-    onceOrError(socket, "drain", callback);
+    var writeRV = socket.write(b);
+    console.log("wrote to socket: ", b, writeRV);
+    if (!writeRV) {
+      onceOrError(socket, "drain", callback);
+    } else {
+      setImmediate(callback, null);
+    }
   }
 }
 
@@ -115,6 +129,7 @@ function doPayloadHanshake(c, successCallback, maybeErrorCallback) {
       return maybeErrorCallback(err, "payloadSize");
     }
     readGivenLength(c, data, payloadSize, function (err, payload, rest) {
+      console.log("Got payload", payload, rest);
       if (err) {
         return maybeErrorCallback(err, "payload");
       }
@@ -124,21 +139,25 @@ function doPayloadHanshake(c, successCallback, maybeErrorCallback) {
       try {
         parsedPayload = JSON.parse(payload.toString());
       } catch (parseErr) {
+        console.log("failed to parse payload: ", parseErr);
         return maybeErrorCallback(parseErr, "payload-parse");
       }
+      console.log("Got parsed payload", parsedPayload);
       successCallback(parsedPayload);
     });
   });
 }
 
 function handleTLSConnection(c) {
-  console.log("got ssl connection: ", c);
+  console.log("got ssl connection: ", c.fd);
   doPayloadHanshake(c, function (parsedPayload) {
     var host = parsedPayload["host"];
     var port = parsedPayload["port"];
     if (!host || !port) {
       return onHandshakeError(c, "bad payload", "payload-parse");
     }
+
+    console.log("before connectTLSToPlain", host, port);
 
     connectTLSToPlain(c, host, port);
   });
@@ -151,21 +170,29 @@ function onHandshakeError(c, err, place) {
 
 function connectTLSToPlain(upstream, host, port) {
   tcpConnect(host, port, function (err, downstream) {
+    console.log("got tls->downstream connection");
     if (err) {
+      console.log("err: ", err);
       return sendPayloadAndClose(upstream, {type: "downstreamConnectError", err: util.inspect(err)}, downstream);
     }
 
+    console.log("before pause");
+
     downstream.pause();
 
+    console.log("sending ok payload");
     sendPayload(upstream, {type: "ok"}, function (err) {
+      console.log("after ok payload");
       if (err) {
         return onTLSError.call(upstream, err);
       }
 
+      console.log("sent ok tls-upstream");
+
       upstream.downstream = downstream;
       downstream.upstream = upstream;
       downstream.on("error", onTLSDownstreamError.bind(downstream));
-      upstream.on("error", onTLSError.bind(c));
+      upstream.on("error", onTLSError.bind(upstream));
 
       downstream.resume();
       upstream.resume();
@@ -191,7 +218,7 @@ function sendPayloadAndClose(socket, payload) {
   var args = arguments;
   return sendPayload(socket, payload, afterSendDisconnect, true);
   function afterSendDisconnect() {
-    closeNoError(upstream);
+    closeNoError(socket);
     var i = args.length - 1;
     for (;i > 1;i--) {
       closeNoError(arguments[i]);
@@ -200,8 +227,9 @@ function sendPayloadAndClose(socket, payload) {
 }
 
 function handlePlainConnection(upstream) {
-  console.log("got plain connection: ", c);
+  console.log("got plain connection: ", upstream);
   doPayloadHanshake(upstream, function (parsedPayload) {
+    console.log("parsed payload: ", parsedPayload);
     var proxyHost = parsedPayload["proxyHost"];
     var proxyPort = parsedPayload["proxyPort"];
     var host = parsedPayload["host"];
@@ -212,7 +240,7 @@ function handlePlainConnection(upstream) {
       return sendPayloadAndClose(upstream, {type: "badPayload", payload: parsedPayload});
     }
 
-    var downstream = tls.connect({host: proxyHost, port: proxyPort});
+    var downstream = tls.connect({host: proxyHost, port: proxyPort, rejectUnauthorized: false});
     onceOrError(downstream, "secureConnect", function (err) {
       if (err) {
         return sendPayloadAndClose(upstream, {type: "downstreamConnectError", err: util.inspect(err)});
