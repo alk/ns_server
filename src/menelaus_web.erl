@@ -269,6 +269,8 @@ loop_inner(Req, AppRoot, DocRoot, Path, PathTokens) ->
                              {auth_ro, fun handle_visual_internal_settings/1};
                          ["nodes", NodeId] ->
                              {auth_ro, fun handle_node/2, [NodeId]};
+                         ["nodes", "self", "proxy"] ->
+                             {done, handle_node_self_proxy(Req)};
                          ["diag"] ->
                              {auth, fun diag_handler:handle_diag/1, []};
                          ["diag", "vbuckets"] -> {auth, fun handle_diag_vbuckets/1};
@@ -2262,6 +2264,10 @@ location_prop_to_json({index_path, L}) -> {index_path, list_to_binary(L)};
 location_prop_to_json({quotaMb, none}) -> {quotaMb, none};
 location_prop_to_json({state, ok}) -> {state, ok};
 location_prop_to_json(KV) -> KV.
+
+handle_node_self_proxy(Req) ->
+    {value, Port} = ns_config:search_node(ssl_proxy_downstream_port),
+    Req:respond({200, add_header(), erlang:integer_to_list(Port)}).
 
 handle_node_resources_post("self", Req)            -> handle_node_resources_post(node(), Req);
 handle_node_resources_post(S, Req) when is_list(S) -> handle_node_resources_post(list_to_atom(S), Req);
