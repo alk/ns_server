@@ -14,7 +14,6 @@ var net = require('net');
     if (cmd.indexOf("\n") != -1) {
       console.log("got cmd: ", cmd);
       console.log("but we can only exit anyway. Thus exiting");
-      // TODO: consider flushing everything before exiting
       process.exit(0);
     }
   });
