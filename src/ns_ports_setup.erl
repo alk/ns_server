@@ -80,6 +80,16 @@ childs_loop_continue(Childs) ->
     end.
 
 per_bucket_moxi_specs(Config) ->
+    MS = do_per_bucket_moxi_specs(Config),
+    {value, UpstreamPort} = ns_config:search(Config, {node, node(), ssl_proxy_upstream_port}),
+    {value, DownstreamPort} = ns_config:search(Config, {node, node(), ssl_proxy_downstream_port}),
+    [{xdcr_proxy,
+      "/root/src/altoros/moxi/ns_server/scripts/proxy-node.js",
+      [erlang:integer_to_list(UpstreamPort), erlang:integer_to_list(DownstreamPort)],
+      [use_stdio, stderr_to_stdout]}
+     | MS].
+
+do_per_bucket_moxi_specs(Config) ->
     BucketConfigs = ns_bucket:get_buckets(Config),
     RestPort = ns_config:search_node_prop(Config, rest, port),
     Command = path_config:component_path(bin, "moxi"),

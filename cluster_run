@@ -105,8 +105,9 @@ def erlang_args_for_node(i):
         "mccouch_port", str(base_mccouch_port + i),
         "memcached_port", str(base_direct_port + i * 2),
         "moxi_port", str(base_direct_port + i * 2 + 1),
-        "memcached_dedicated_port", str(base_direct_port - 1 - i * 2),
-        "ssl_proxy_port", str(base_direct_port - 2 - i * 2),
+        "memcached_dedicated_port", str(base_direct_port - 1 - i * 3),
+        "ssl_proxy_downstream_port", str(base_direct_port - 2 - i * 3),
+        "ssl_proxy_upstream_port", str(base_direct_port - 3 - i * 3),
         "nodefile", "undefined",
         "short_name", '"n_{0}"'.format(i),
         ] + cluster_extra_args

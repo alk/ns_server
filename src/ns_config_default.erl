@@ -114,8 +114,11 @@ default() ->
      {{node, node(), capi_port},
       CAPIPort},
 
-     {{node, node(), ssl_proxy_port},
-      misc:get_env_default(ssl_proxy_port, 11214)},
+     {{node, node(), ssl_proxy_downstream_port},
+      misc:get_env_default(ssl_proxy_downstream_port, 11214)},
+
+     {{node, node(), ssl_proxy_upstream_port},
+      misc:get_env_default(ssl_proxy_upstream_port, 11215)},
 
                                                 % In 1.0, only the first entry in the creds list is displayed in the UI
                                                 % and accessible through the UI.
