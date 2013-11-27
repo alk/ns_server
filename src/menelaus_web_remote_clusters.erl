@@ -121,6 +121,8 @@ validate_remote_cluster_params(Params, ExistingClusters) ->
     Hostname = proplists:get_value("hostname", Params),
     Username = proplists:get_value("username", Params),
     Password = proplists:get_value("password", Params),
+    DemandEncryption = proplists:get_value("demandEncryption", Params, "0"),
+    Cert = proplists:get_value("certificate", Params, ""),
     NameError = case check_nonempty(Name, <<"name">>, <<"cluster name">>) of
                     X when is_tuple(X) -> X;
                     _ ->
@@ -143,9 +145,19 @@ validate_remote_cluster_params(Params, ExistingClusters) ->
                     end,
     UsernameError = check_nonempty(Username, <<"username">>, <<"username">>),
     PasswordError = check_nonempty(Password, <<"password">>, <<"password">>),
+    EncryptionError = case {DemandEncryption, Cert} of
+                          {"0", ""} ->
+                              undefined;
+                          {"0", _} ->
+                              {<<"certificate">>, <<"certificate must not be given if demand encryption is off">>};
+                          {_, ""} ->
+                              {<<"certificate">>, <<"certificate must be given if demand encryption is on">>};
+                          {_, _} ->
+                              undefined
+                      end,
     Errors0 = lists:filter(fun (undefined) -> false;
-                              (_) -> true
-                          end, [NameError, HostnameError, UsernameError, PasswordError]),
+                               (_) -> true
+                           end, [NameError, HostnameError, UsernameError, PasswordError, EncryptionError]),
     Errors = case lists:any(fun (KV) ->
                                     lists:keyfind(name, 1, KV) =:= {name, Name} andalso
                                         proplists:get_value(deleted, KV, false) =:= false
@@ -158,10 +170,17 @@ validate_remote_cluster_params(Params, ExistingClusters) ->
              end,
     case Errors of
         [] ->
-            {ok, [{name, Name},
-                  {hostname, Hostname},
-                  {username, Username},
-                  {password, Password}]};
+            BaseKVList = [{name, Name},
+                          {hostname, Hostname},
+                          {username, Username},
+                          {password, Password}],
+            KVList = case DemandEncryption of
+                         "0" ->
+                             BaseKVList;
+                         _ ->
+                             [{cert, Cert} | BaseKVList]
+                     end,
+            {ok, KVList};
         _ ->
             {errors, Errors}
     end.
