@@ -18,6 +18,10 @@ var net = require('net');
       process.exit(0);
     }
   });
+  process.stdin.on("end", function () {
+    console.log("eof on stdin. Exiting");
+    process.exit(0);
+  });
  })();
 
 console.log("ready");
@@ -26,6 +30,18 @@ var proxyOptions = {
   tlsPort: 9999,
   plainPort: 9998
 };
+
+console.log("process.argv: ", process.argv);
+
+if (process.argv.length > 2) {
+  proxyOptions.tlsPort = parseInt(process.argv[2], 10);
+  proxyOptions.plainPort = parseInt(process.argv[3], 10);
+  if (!proxyOptions.tlsPort || !proxyOptions.plainPort) {
+    throw new Error("bad port args");
+  }
+}
+
+console.log("proxyOptions: ", proxyOptions);
 
 ;(function setupTSLServer() {
   var options = {
