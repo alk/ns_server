@@ -1306,12 +1306,21 @@ build_node_info(Config, WantENode, InfoNode, LocalAddr) ->
     OS = proplists:get_value(system_arch, InfoNode, "unknown"),
     HostName = build_node_hostname(Config, WantENode, LocalAddr),
 
+    PortsKV0 = [{proxy, ProxyPort},
+                {direct, DirectPort}],
+
+    PortsKV = case ns_config:search_node(WantENode, Config, ssl_proxy_downstream_port) of
+                  {value, SSLProxyPort} ->
+                      [{ssl_proxy, SSLProxyPort} | PortsKV0];
+                  false ->
+                      PortsKV0
+              end,
+
     RV = [{hostname, list_to_binary(HostName)},
           {clusterCompatibility, ns_heart:effective_cluster_compat_version()},
           {version, list_to_binary(Version)},
           {os, list_to_binary(OS)},
-          {ports, {struct, [{proxy, ProxyPort},
-                            {direct, DirectPort}]}}
+          {ports, {struct, PortsKV}}
          ],
     case WantENode =:= node() of
         true ->
