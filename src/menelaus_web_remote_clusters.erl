@@ -308,7 +308,8 @@ check_remote_cluster_already_exists(RemoteUUID, Clusters) ->
 %% proplist with uuid being added;
 validate_remote_cluster(Cluster, OtherClusters) ->
     case remote_clusters_info:fetch_remote_cluster(Cluster) of
-        {ok, #remote_cluster{uuid=RemoteUUID}} ->
+        %% TODO: do we really need ProxyPort ?
+        {ok, #remote_cluster{uuid=RemoteUUID}, _ProxyPort} ->
             case check_remote_cluster_already_exists(RemoteUUID, OtherClusters) of
                 ok ->
                     {ok, [{uuid, RemoteUUID} |

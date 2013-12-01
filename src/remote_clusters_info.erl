@@ -128,7 +128,7 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
--spec fetch_remote_cluster(list()) -> {ok, #remote_cluster{}} |
+-spec fetch_remote_cluster(list()) -> {ok, #remote_cluster{}, undefined | pos_integer()} |
                                       {error, timeout} |
                                       {error, rest_error, Msg, Details} |
                                       {error, client_error, Msg} |
@@ -143,7 +143,7 @@ fetch_remote_cluster(Cluster) ->
     fetch_remote_cluster(Cluster, ?FETCH_CLUSTER_TIMEOUT).
 
 -spec fetch_remote_cluster(list(), integer()) ->
-                                  {ok, #remote_cluster{}} |
+                                  {ok, #remote_cluster{}, undefined | pos_integer()} |
                                   {error, timeout} |
                                   {error, rest_error, Msg, Details} |
                                   {error, client_error, Msg} |
@@ -327,6 +327,7 @@ handle_call({get_remote_bucket, Cluster, Bucket, true, Timeout}, From, State) ->
     Username = proplists:get_value(username, Cluster),
     Password = proplists:get_value(password, Cluster),
     UUID = proplists:get_value(uuid, Cluster),
+    Cert = proplists:get_value(cert, Cluster),
 
     true = (Username =/= undefined),
     true = (Password =/= undefined),
@@ -338,8 +339,15 @@ handle_call({get_remote_bucket, Cluster, Bucket, true, Timeout}, From, State) ->
                 Hostname = proplists:get_value(hostname, Cluster),
                 true = (Hostname =/= undefined),
 
-                Nodes = [hostname_to_remote_node(Hostname)],
-                #remote_cluster{uuid=UUID, nodes=Nodes};
+                NodeRecord0 = hostname_to_remote_node(Hostname),
+                NodeRecord = case Cert of
+                                 undefined ->
+                                     NodeRecord0;
+                                 _ ->
+                                     NodeRecord0#remote_node{ssl_proxy_port = needed_but_unknown}
+                             end,
+                Nodes = [NodeRecord],
+                #remote_cluster{uuid=UUID, nodes=Nodes, cert=Cert};
             [{UUID, FoundCluster}] ->
                 FoundCluster
         end,
@@ -838,10 +846,35 @@ remote_cluster(Cluster) ->
 
     {Host, Port} = host_and_port(Hostname),
 
-    JsonGet = mk_json_get(Host, Port, Username, Password),
-    do_remote_cluster(JsonGet).
+    ProxyRV = case proplists:get_value(cert, Cluster) of
+                  undefined ->
+                      {ok, undefined, undefined};
+                  _ ->
+                      %% TODO: more error handling here. Handle 404
+                      get_remote_proxy_port(Host, Port)
+              end,
 
-do_remote_cluster(JsonGet) ->
+    case ProxyRV of
+        {ok, LP, RP} ->
+            JsonGet = mk_json_get(Host, Port, Username, Password, LP, RP),
+            Cert = proplists:get_value(cert, Cluster),
+            do_remote_cluster(JsonGet, Cert, RP);
+        Error ->
+            Error
+    end.
+
+get_remote_proxy_port(Host, Port) ->
+    JG = mk_json_get(Host, Port, "", "", undefined, undefined),
+    JG("/nodes/self/proxy", fun continue_get_remote_proxy_port/1).
+
+continue_get_remote_proxy_port(RemotePort) when is_integer(RemotePort) ->
+    {value, LocalPort} = ns_config:search_node(ssl_proxy_upstream_port),
+    {ok, LocalPort, RemotePort};
+continue_get_remote_proxy_port(_NotPort) ->
+    {error, failed_to_get_proxy_port}.
+
+
+do_remote_cluster(JsonGet, Cert, RemoteProxyPort) ->
     with_pools(
       JsonGet,
       fun (Pools, UUID) ->
@@ -850,14 +883,17 @@ do_remote_cluster(JsonGet) ->
                 fun (PoolDetails) ->
                         with_nodes(
                           PoolDetails, <<"default pool details">>,
-                          [{<<"hostname">>, fun extract_string/2}],
+                          [{<<"hostname">>, fun extract_string/2},
+                           {<<"sslProxy">>, fun extract_number/2}],
                           fun (NodeProps) ->
                                   Nodes = lists:map(fun props_to_remote_node/1,
                                                     NodeProps),
                                   SortedNodes = lists:sort(Nodes),
 
                                   {ok, #remote_cluster{uuid=UUID,
-                                                       nodes=SortedNodes}}
+                                                       nodes=SortedNodes,
+                                                       cert=Cert},
+                                   RemoteProxyPort}
                           end)
                 end)
       end).
@@ -911,7 +947,14 @@ props_to_remote_node(Props) ->
     Hostname = proplists:get_value(<<"hostname">>, Props),
     true = (Hostname =/= undefined),
 
-    hostname_to_remote_node(binary_to_list(Hostname)).
+    RV = hostname_to_remote_node(binary_to_list(Hostname)),
+
+    case proplists:get_value(<<"sslProxy">>, Props) of
+        undefined ->
+            RV;
+        SSLProxyPort ->
+            RV#remote_node{ssl_proxy_port = SSLProxyPort}
+    end.
 
 hostname_to_remote_node(Hostname) ->
     {Host, Port} = host_and_port(Hostname),
@@ -934,16 +977,34 @@ host_and_port(Hostname) ->
             end
     end.
 
-remote_cluster_and_bucket(TargetNode, #remote_cluster{uuid=UUID},
+remote_cluster_and_bucket(TargetNode, #remote_cluster{uuid=UUID, cert = Cert},
                           BucketStr, Username, Password) ->
     Bucket = list_to_binary(BucketStr),
-    remote_bucket_from_node(TargetNode, Bucket, Username, Password, UUID).
+    remote_bucket_from_node(TargetNode, Bucket, Username, Password, UUID, Cert).
 
-remote_bucket_from_node(#remote_node{host=Host, port=Port},
-                        Bucket, Username, Password, UUID) ->
+remote_bucket_from_node(#remote_node{host=Host, port=Port, ssl_proxy_port = needed_but_unknown},
+                        Bucket, Username, Password, UUID, Cert) ->
+    true = (Cert =/= undefined),
+    case get_remote_proxy_port(Host, Port) of
+        {ok, _LocalPort, RemotePort} ->
+            RemoteNode = #remote_node{host=Host, port=Port, ssl_proxy_port=RemotePort},
+            remote_bucket_from_node(RemoteNode,
+                                    Bucket, Username, Password, UUID, Cert);
+        Err ->
+            Err
+    end;
+remote_bucket_from_node(#remote_node{host=Host, port=Port, ssl_proxy_port=RemoteProxyPort},
+                        Bucket, Username, Password, UUID, _Cert) ->
     Creds = {Username, Password},
 
-    JsonGet = mk_json_get(Host, Port, Username, Password),
+    JsonGet = case RemoteProxyPort of
+                  undefined ->
+                      mk_json_get(Host, Port, Username, Password, undefined, undefined);
+                  _ ->
+                      %% TODO: abstract this better
+                      {value, LocalPort} = ns_config:search_node(ssl_proxy_upstream_port),
+                      mk_json_get(Host, Port, Username, Port, LocalPort, RemoteProxyPort)
+              end,
 
     with_pools(
       JsonGet,
@@ -1186,14 +1247,23 @@ validate_server_list([Server | Rest]) ->
               validate_server_list(Rest)
       end).
 
-mk_json_get(Host, Port, Username, Password) ->
+mk_json_get(Host, Port, Username, Password, LocalProxyPort, RemoteProxyPort) ->
+    Options0 = [{connect_timeout, 30000},
+                {timeout, 60000},
+                {pool, xdc_lhttpc_pool}],
+    Options = case LocalProxyPort of
+                  undefined ->
+                      Options0;
+                  _ ->
+                      [{local_proxy_port, LocalProxyPort},
+                       {remote_proxy_port, RemoteProxyPort}
+                       | Options0]
+              end,
     fun (Path, K) ->
             R = menelaus_rest:json_request_hilevel(get,
                                                    {Host, Port, Path},
                                                    {Username, Password},
-                                                   [{connect_timeout, 30000},
-                                                    {timeout, 60000},
-                                                    {pool, xdc_lhttpc_pool}]),
+                                                   Options),
 
             case R of
                 {ok, Value} ->
