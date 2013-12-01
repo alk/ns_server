@@ -1311,7 +1311,7 @@ build_node_info(Config, WantENode, InfoNode, LocalAddr) ->
 
     PortsKV = case ns_config:search_node(WantENode, Config, ssl_proxy_downstream_port) of
                   {value, SSLProxyPort} ->
-                      [{ssl_proxy, SSLProxyPort} | PortsKV0];
+                      [{sslProxy, SSLProxyPort} | PortsKV0];
                   false ->
                       PortsKV0
               end,
