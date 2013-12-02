@@ -18,12 +18,21 @@
 -record(state, {pool}).
 
 init({Pool}) ->
+    erlang:process_flag(trap_exit, true),
     Tid = ets:new(none, []),
     erlang:put(host_port_to_proxy_tid, Tid),
+    Tid2 = ets:new(none, []),
+    erlang:put(child_processes, Tid2),
     {ok, #state{pool = Pool}}.
 
-handle_call({socket, _Pid, {Host, Port, _Bucket}} = CallMsg, _From,
-            #state{pool = Pool} = State) ->
+handle_call({socket, _Pid, {_Host, _Port, _Bucket}} = CallMsg, From,
+            State) ->
+    Pid = spawn_link(erlang, apply, do_socket, [CallMsg, From, State, self()]),
+    ets:insert(erlang:get(child_processes), {Pid, From}),
+    {noreply, State}.
+
+do_socket({socket, _Pid, {Host, Port, Bucket}} = CallMsg, From,
+          #state{pool = Pool}, Parent) ->
     %% TODO: process and blocking
     case gen_server:call(Pool, CallMsg, infinity) of
         {ok, Socket} ->
