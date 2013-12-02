@@ -85,7 +85,6 @@ put_socket(Server, Dest, Socket) ->
             ok
     end.
 
-
 %% @spec (PoolPidOrName) -> Count
 %%    Count = integer()
 %% @doc Returns the total number of active connections maintained by the
