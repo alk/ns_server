@@ -55,14 +55,16 @@ do_connect(Host, Port) ->
     end.
 
 establish_proxied_connection(LocalPort, RemotePort, Host, Port) ->
-   {ok, Socket} = gen_tcp:connections("127.0.0.1", LocalPort),
+   {ok, Socket} = gen_tcp:connect("127.0.0.1", LocalPort,
+                                  [binary, {active, false}, {packet, 0}]),
     ReqPayload = ejson:encode({[{host, <<"127.0.0.1">>},
                                 {port, Port},
                                 {proxyHost, list_to_binary(Host)},
-                                {proxyPort, RemotePort}]}),
+                                {proxyPort, RemotePort},
+                                {cert, <<"asd">>}]}),
     FullReqPayload = [<<(erlang:size(ReqPayload)):32/big>> | ReqPayload],
     ok = gen_tcp:send(Socket, FullReqPayload),
-    {ok, ReplSize} = gen_tcp:recv(Socket, 4),
+    {ok, <<ReplSize:32/big>>} = gen_tcp:recv(Socket, 4),
     {ok, RepBinPayload} = gen_tcp:recv(Socket, ReplSize),
     {KV} = ejson:decode(RepBinPayload),
     case proplists:get_value(<<"type">>, KV) of
