@@ -1,8 +1,11 @@
 -module(ns_ssl_proxy_test_client).
 
--export([test/0]).
+-export([test/1, cert/1]).
 
-test() ->
+cert(CertDir) ->
+    ns_ssl:create_self_signed_cert("/usr/bin/openssl", CertDir).
+
+test(CertDir) ->
     {ok, Socket} = gen_tcp:connect("127.0.0.1", 9998,
                                    [binary,
                                     {reuseaddr, true},
@@ -10,26 +13,12 @@ test() ->
                                     {packet, raw},
                                     {active, false}], infinity),
 
-    ns_ssl_proxy_server:send_json(Socket, {[{proxyHost, list_to_binary("127.0.0.1")},
-                                            {proxyPort, 9997},
-                                            {port, 80}]}),
+    CertFile = filename:join([CertDir, "cert.pem"]),
 
-    send_cert(Socket),
-
-    Reply = ns_ssl_proxy_server:receive_json(Socket),
-    io:format("Reply: ~p~n", [Reply]),
+    ns_ssl:establish_ssl_proxy_connection(Socket, "127.0.0.1", 80, 9997, CertFile),
 
     send_get(Socket, "/"),
     receive_loop(Socket).
-
-get_cert() ->
-    {ok, PemBin} = file:read_file("cacert.pem"),
-    [{'Certificate', DerEncoded, _}] = public_key:pem_decode(PemBin),
-    DerEncoded.
-
-send_cert(Socket) ->
-    Cert = get_cert(),
-    ok = gen_tcp:send(Socket, [<<(erlang:size(Cert)):32/big>> | Cert]).
 
 receive_loop(Socket) ->
     case gen_tcp:recv(Socket, 0, infinity) of

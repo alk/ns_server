@@ -15,7 +15,13 @@
 
 -module(ns_ssl).
 
--export([create_self_signed_cert/2]).
+-export([create_self_signed_cert/2, establish_ssl_proxy_connection/5]).
+
+-export([receive_json/2, receive_binary_payload/2, send_json/2]).
+
+-include("ns_common.hrl").
+
+-define(MAX_PAYLOAD_SIZE, 10000).
 
 create_self_signed_cert(OpensslPath, Dir) ->
     CnfFile = filename:join([Dir, "req.cnf"]),
@@ -63,3 +69,38 @@ eval_cmd(Port) ->
     after 0 ->
             ok
     end.
+
+establish_ssl_proxy_connection(Socket, Host, Port, ProxyPort, CertFile) ->
+    send_json(Socket, {[{proxyHost, list_to_binary(Host)},
+                        {proxyPort, ProxyPort},
+                        {port, Port}]}),
+    send_cert(Socket, CertFile),
+    Reply = receive_json(Socket, infinity),
+    <<"ok">> = proplists:get_value(<<"type">>, Reply).
+
+send_cert(Socket, CertFile) ->
+    {ok, PemBin} = file:read_file(CertFile),
+    [{'Certificate', DerEncoded, _}] = public_key:pem_decode(PemBin),
+
+    ok = gen_tcp:send(Socket, [<<(erlang:size(DerEncoded)):32/big>> | DerEncoded]).
+
+receive_binary_payload(Socket, Timeout) ->
+    {ok, <<Size:32>>} = gen_tcp:recv(Socket, 4, Timeout),
+    if
+        Size > ?MAX_PAYLOAD_SIZE ->
+            ?log_error("Received invalid payload size ~p~n", [Size]),
+            throw(invalid_size);
+        true ->
+            ok
+    end,
+    {ok, Payload} = gen_tcp:recv(Socket, Size, Timeout),
+    Payload.
+
+receive_json(Socket, Timeout) ->
+    {KV} = ejson:decode(receive_binary_payload(Socket, Timeout)),
+    KV.
+
+send_json(Socket, Json) ->
+    ReqPayload = ejson:encode(Json),
+    FullReqPayload = [<<(erlang:size(ReqPayload)):32/big>> | ReqPayload],
+    ok = gen_tcp:send(Socket, FullReqPayload).

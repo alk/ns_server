@@ -19,11 +19,7 @@
 
 -export([loop_plain_to_ssl/3, loop_ssl_to_plain/3]).
 
-% for test client
--export([receive_json/1, send_json/2]).
-
 -define(CONTROL_PAYLOAD_TIMEOUT, 10000).
--define(MAX_CONTROL_PAYLOAD_SIZE, 10000).
 -define(PROXY_RESPONSE_TIMEOUT, 60000).
 
 -include("ns_common.hrl").
@@ -36,7 +32,7 @@ init(Socket) ->
     process_flag(trap_exit, true),
     ?log_debug("Server started on socket ~p ~n", [Socket]),
     inet:setopts(Socket, [{active, false}]),
-    KV = receive_json(Socket),
+    KV = ns_ssl:receive_json(Socket, ?CONTROL_PAYLOAD_TIMEOUT),
 
     Port = proplists:get_value(<<"port">>, KV),
     case {proplists:get_value(<<"proxyHost">>, KV),
@@ -48,35 +44,14 @@ init(Socket) ->
             init_client_proxy(Socket, Port, binary_to_list(H), P)
     end.
 
-receive_binary_payload(Socket) ->
-    {ok, <<Size:32>>} = gen_tcp:recv(Socket, 4, ?CONTROL_PAYLOAD_TIMEOUT),
-    if
-        Size > ?MAX_CONTROL_PAYLOAD_SIZE ->
-            ?log_error("Received invalid payload size ~p~n", [Size]),
-            throw(invalid_size);
-        true ->
-            ok
-    end,
-    {ok, Payload} = gen_tcp:recv(Socket, Size, ?CONTROL_PAYLOAD_TIMEOUT),
-    Payload.
-
-receive_json(Socket) ->
-    {KV} = ejson:decode(receive_binary_payload(Socket)),
-    KV.
-
-send_json(Socket, Json) ->
-    ReqPayload = ejson:encode(Json),
-    FullReqPayload = [<<(erlang:size(ReqPayload)):32/big>> | ReqPayload],
-    ok = gen_tcp:send(Socket, FullReqPayload).
-
 send_initial_req(Socket, Port) ->
-    send_json(Socket, {[{port, Port}]}).
+    ns_ssl:send_json(Socket, {[{port, Port}]}).
 
 send_reply(Socket, Type) ->
-    send_json(Socket, {[{type, list_to_binary(Type)}]}).
+    ns_ssl:send_json(Socket, {[{type, list_to_binary(Type)}]}).
 
 init_client_proxy(Socket, Port, ProxyHost, ProxyPort) ->
-    DerEncodedCert = receive_binary_payload(Socket),
+    DerEncodedCert = ns_ssl:receive_binary_payload(Socket, ?CONTROL_PAYLOAD_TIMEOUT),
     Cert = public_key:pkix_decode_cert(DerEncodedCert, otp),
 
     {ok, PlainSocket} = gen_tcp:connect(ProxyHost, ProxyPort,
@@ -87,7 +62,7 @@ init_client_proxy(Socket, Port, ProxyHost, ProxyPort) ->
                                          {active, false}], ?PROXY_RESPONSE_TIMEOUT),
     send_initial_req(PlainSocket, Port),
 
-    KV = receive_json(PlainSocket),
+    KV = ns_ssl:receive_json(PlainSocket, ?CONTROL_PAYLOAD_TIMEOUT),
     <<"upgrade">> = proplists:get_value(<<"type">>, KV),
 
     {ok, SSLSocket} = ssl:connect(PlainSocket,
