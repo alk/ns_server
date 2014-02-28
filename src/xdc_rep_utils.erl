@@ -18,6 +18,8 @@
 -module(xdc_rep_utils).
 
 -export([parse_rep_doc/2]).
+-export([build_lhttpc_options/2]).
+-export([split_bucket_name_out_of_target_url/1]).
 -export([local_couch_uri_for_vbucket/2]).
 -export([remote_couch_uri_for_vbucket/3, my_active_vbuckets/1]).
 -export([parse_rep_db/3]).
@@ -76,6 +78,32 @@ parse_proxy_params([]) ->
 parse_proxy_params(ProxyUrl) ->
     [{proxy, ProxyUrl}].
 
+build_basic_lhttpc_options(Url, XDCROptions) ->
+    SslParams = case Url of
+                    "http://" ++ _ ->
+                        [];
+                    "https://" ++ _ ->
+                        %% we cannot allow https without cert. If cert
+                        %% is missing, requests must not go through
+                        %% (undefined will cause crash in call below)
+                        CertPEM = get_value(xdcr_cert, XDCROptions, undefined),
+                        ns_ssl:cert_pem_to_ssl_verify_options(CertPEM)
+                end,
+    ConnectOpts = get_value(socket_options, XDCROptions) ++ SslParams,
+    Timeout = get_value(connection_timeout, XDCROptions) * 1000,
+    lists:keysort(1, [
+                      {connect_options, ConnectOpts},
+                      {connect_timeout, Timeout},
+                      {send_retry, 0}
+                     ]).
+
+build_lhttpc_options(Url, XDCROptions) ->
+    ?log_debug("XDCROptions: ~p", [XDCROptions]),
+    Timeout = get_value(connection_timeout, XDCROptions) * 1000,
+    [{pool, xdc_lhttpc_pool},
+     {connect_timeout, Timeout}]
+        ++ build_basic_lhttpc_options(Url, XDCROptions).
+
 parse_rep_db({Props}, _ProxyParams, Options) ->
     Url = maybe_add_trailing_slash(get_value(<<"url">>, Props)),
     {AuthProps} = get_value(<<"auth">>, Props, {[]}),
@@ -100,23 +128,8 @@ parse_rep_db({Props}, _ProxyParams, Options) ->
                       end
                  }
             end,
-    SslParams = case Url of
-                    "http://" ++ _ ->
-                        [];
-                    "https://" ++ _ ->
-                        %% we cannot allow https without cert. If cert
-                        %% is missing, requests must not go through
-                        %% (undefined will cause crash in call below)
-                        CertPEM = get_value(xdcr_cert, Options, undefined),
-                        ns_ssl:cert_pem_to_ssl_verify_options(CertPEM)
-                end,
-    ConnectOpts = get_value(socket_options, Options) ++ SslParams,
     Timeout = get_value(connection_timeout, Options) * 1000,
-    LhttpcOpts = lists:keysort(1, [
-                                   {connect_options, ConnectOpts},
-                                   {connect_timeout, Timeout},
-                                   {send_retry, 0}
-                                  ]),
+    LhttpcOpts = build_basic_lhttpc_options(Url, Options),
 
     #httpdb{
              url = Url,
@@ -169,6 +182,13 @@ get_master_db(DbName0) ->
     {Bucket, _} = split_dbname(DbName),
     MasterDbName = Bucket ++ "/master",
     unsplit_uuid({MasterDbName, UUID}).
+
+split_bucket_name_out_of_target_url(Url) ->
+    [Scheme, Host, DbName0] = string:tokens(couch_util:to_list(Url), "/"),
+    DbName = couch_httpd:unquote(DbName0),
+    {RawDbName, UUID} = split_uuid(DbName),
+    [BucketName, VBString] = string:tokens(RawDbName, "/"),
+    {Scheme ++ "//" ++ Host ++ "/", BucketName, UUID, VBString}.
 
 split_dbname(DbName) ->
     %% couchbase does not support slashes in bucket names; thus we can have only
