@@ -195,9 +195,9 @@ update_docs(Db, Docs, Options, replicated_changes) ->
 
 %% new ensure_full_commit uses CMD_CHECKPOINT_PERSISTENCE to issue
 %% priority checkpoint
--spec ensure_full_commit(any(), integer()) -> {ok, binary()}.
+-spec ensure_full_commit(any(), integer()) -> none().
 ensure_full_commit(_Db, _RequiredSeq) ->
-    not_implemented(ensure_full_commit, []).
+    exit(not_implemented(ensure_full_commit, [])).
 
 check_is_admin(_Db) ->
     ok.
