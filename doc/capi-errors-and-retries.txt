@@ -1,0 +1,70 @@
+
+view requests
+--------------
+
+May fail because of concurrent requests limit. In this case 503 with
+Retry-After header is sent back. Clients are advised to comply to
+Retry-After (and file bugs if values are too large).
+
+May fail because of auth. Clients are always expected to send bucket
+auth. Even on first request. In this case 401 means auth is wrong (and
+just missing). Retrying is not advised in this case.
+
+May fail because of trying to send view request against memcached
+bucket. Will get 404 back (there will be no_couchbase_bucket_exists
+'reason' in couchdb style response). Retrying is not advised in this
+case.
+
+May fail because of bucket uuid mismatch. It happens if client's
+config and particularly capi base uri refers to different instance of
+bucket than current bucket instance having given name. Will get 404
+back. Retrying is not advised in this case.
+
+May fail because missing ddoc or view is queried. In former case,
+condition can be temporarily (new ddoc is not yet fully propagated to
+all nodes). Such condition is not specially marked in any way. Clients
+are not advised to retry. But retry logic can be added into
+higher-level operations like "create ddoc and wait until it's ready on
+all nodes". Which requires low-level client to propagate error up with
+sufficient detail.
+
+May fail with 500 if request is sent to node that doesn't host given
+bucket yet. That's server bug (MB-9915). As special case clients are
+advised to workaround this rare condition as follows:
+* update bucket config
+* retry
+
+Clients must _only_ send view requests to nodes that are part of
+_bucket_ servers list. Which can be smaller set than list of _pools_
+servers list.
+
+May fail with 302 and body {error: no_active_vbuckets, reason:...} if
+request hit node that's part of bucket's server list but doesn't have
+any active vbuckets (yet or already). Response contains Location
+header. Client is advised to retry without any delay following
+Location header. Client MAY "taboo" this node w.r.t. view requests for
+some time (low seconds). I.e. it may temporarily exclude this node
+from node that are sent view requests. If it wishes to rate-limit this
+condition. It's advised to do so.
+
+View merge may fail with a number of possible reasons (like failing to
+get consistent snapshot of vbucket states and ddoc versions). All will
+send 500 back. Clients are not advised to retry them. Server has already
+retried internally where necessary.
+
+May time out if server is overloaded. Client is not advised to retry.
+
+May close connection if server crashes or is being shut down. Client
+is not advised to retry.
+
+May fail with 500 for internal crash or bug. Client is not advised to
+retry.
+
+May return partial result (with some nodes' results omitted). Client
+is advised to consume partial results and not retry automatically.
+
+ddoc ops (reads/updates)
+-------------------------
+
+May get 4xx due to same reasons as above. Same behavior is advised.
+
