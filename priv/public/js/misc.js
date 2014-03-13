@@ -746,12 +746,12 @@ var Abortarium = {
   }
 };
 
-function serializeForm(f, modifiers) {
+function serializeForm(f, modifiers, seenKeysAsArray) {
   f = $(f);
   var array = f.serializeArray();
   var seenKeys = {};
   array = _.filter(array.reverse(), function (pair) {
-    if (seenKeys[pair.name]) {
+    if (seenKeys[pair.name] && !seenKeysAsArray) {
       return false;
     }
     if (modifiers && modifiers[pair.name]) {

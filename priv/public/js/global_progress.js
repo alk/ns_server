@@ -42,6 +42,19 @@
       escapeHTML(obj.bucket) + '</span></li>';
   };
 
+  render.collect_logs = function (obj) {
+    if (obj.status !== "running") {
+      return "";
+    }
+
+    var serversCount = (obj.perNode || []).length;
+
+    return '<li class="clearfix"><div class="usage_smallest">' +
+    '<div class="used" style="width:' + (obj.progress >> 0) +
+    '%"></div></div><span class="message">Collecting ' + serversCount +
+    ' ' + (serversCount === 1 ? 'node' : 'nodes') + '</span></li>';
+  };
+
   render.rebalance = function (obj) {
     if (obj.status !== "running") {
       return "";
