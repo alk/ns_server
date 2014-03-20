@@ -549,9 +549,7 @@ init_replication_state(#init_state{rep = Rep,
     {ok, Source} = couch_api_wrap:db_open(SrcVbDb, []),
     {ok, Target} = couch_api_wrap:db_open(TgtDb, []),
 
-    {ok, SrcMasterDb} = couch_api_wrap:db_open(
-                          xdc_rep_utils:get_master_db(Source),
-                          []),
+    SrcMasterDb = capi_utils:must_open_vbucket(Src, <<"master">>),
     {ok, TgtMasterDb} = couch_api_wrap:db_open(
                           xdc_rep_utils:get_master_db(Target),
                           []),
@@ -723,9 +721,7 @@ start_replication(#rep_state{
         end,
     {ok, Target} = couch_api_wrap:db_open(TgtDB, []),
 
-    {ok, SrcMasterDb} = couch_api_wrap:db_open(
-                          xdc_rep_utils:get_master_db(Source),
-                          []),
+    SrcMasterDb = capi_utils:must_open_vbucket(SourceBucket, <<"master">>),
     {ok, TgtMasterDb} = couch_api_wrap:db_open(
                           xdc_rep_utils:get_master_db(Target), []),
 
