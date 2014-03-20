@@ -16,14 +16,13 @@
 -export([start_link/1]).
 
 -include("xdc_replicator.hrl").
+-include("xdcr_upr_streamer.hrl").
 
 %% imported functions
 -import(couch_util, [get_value/3]).
 
-%% in XDCR the Source should always from local with record #db{}, while
-%% the target should always from remote with record #httpdb{}. There is
-%% no intra-cluster XDCR
-start_link(#rep_worker_option{cp = Cp, source = Source, target = Target,
+start_link(#rep_worker_option{cp = Cp, target = Target,
+                              source_bucket = SourceBucket,
                               worker_id  = WorkerID,
                               changes_manager = ChangesManager,
                               opt_rep_threshold = OptRepThreshold,
@@ -32,7 +31,7 @@ start_link(#rep_worker_option{cp = Cp, source = Source, target = Target,
                               batch_items = BatchItems} = _WorkerOption) ->
     Pid = spawn_link(fun() ->
                              erlang:monitor(process, ChangesManager),
-                             queue_fetch_loop(WorkerID, Source, Target, Cp,
+                             queue_fetch_loop(WorkerID, Target, Cp,
                                               ChangesManager, OptRepThreshold,
                                               BatchSize, BatchItems, XMemLoc)
                      end),
@@ -40,13 +39,13 @@ start_link(#rep_worker_option{cp = Cp, source = Source, target = Target,
 
     ?xdcr_trace("create queue_fetch_loop process (worker_id: ~p, pid: ~p) within replicator (pid: ~p) "
                 "Source: ~p, Target: ~p, ChangesManager: ~p, latency optimized: ~p",
-                [WorkerID, Pid, Cp, Source#db.name, misc:sanitize_url(Target#httpdb.url), ChangesManager, OptRepThreshold]),
+                [WorkerID, Pid, Cp, SourceBucket, misc:sanitize_url(Target#httpdb.url), ChangesManager, OptRepThreshold]),
 
     {ok, Pid}.
 
--spec queue_fetch_loop(integer(), #db{}, #httpdb{}, pid(), pid(),
+-spec queue_fetch_loop(integer(), #httpdb{}, pid(), pid(),
                        integer(), integer(), integer(), any()) -> ok.
-queue_fetch_loop(WorkerID, Source, Target, Cp, ChangesManager,
+queue_fetch_loop(WorkerID, Target, Cp, ChangesManager,
                  OptRepThreshold, BatchSize, BatchItems, XMemLoc) ->
     ?xdcr_trace("fetch changes from changes manager at ~p (target: ~p)",
                 [ChangesManager, misc:sanitize_url(Target#httpdb.url)]),
@@ -54,16 +53,15 @@ queue_fetch_loop(WorkerID, Source, Target, Cp, ChangesManager,
     receive
         {'DOWN', _, _, _, _} ->
             ok = gen_server:call(Cp, {worker_done, self()}, infinity);
-        {changes, ChangesManager, Changes, ReportSeq} ->
+        {changes, ChangesManager, Changes, ReportSeq, SnapshotSeq} ->
             %% get docinfo of missing ids
             {MissingDocInfoList, MetaLatency, NumDocsOptRepd} =
                 find_missing(Changes, Target, OptRepThreshold, XMemLoc),
             NumChecked = length(Changes),
             NumWritten = length(MissingDocInfoList),
-            %% use ptr in docinfo to fetch document from storage
             Start = now(),
             {ok, DataRepd} = local_process_batch(
-                               MissingDocInfoList, Cp, Source, Target,
+                               MissingDocInfoList, Cp, Target,
                                #batch{}, BatchSize, BatchItems, XMemLoc),
 
             %% the latency returned should be coupled with batch size, for example,
@@ -76,6 +74,7 @@ queue_fetch_loop(WorkerID, Source, Target, Cp, ChangesManager,
                                       #worker_stat{
                                         worker_id  = WorkerID,
                                         seq = ReportSeq,
+                                        snapshot_seq = SnapshotSeq,
                                         worker_meta_latency_aggr = MetaLatency*NumChecked,
                                         worker_docs_latency_aggr = DocLatency*NumWritten,
                                         worker_data_replicated = DataRepd,
@@ -86,44 +85,35 @@ queue_fetch_loop(WorkerID, Source, Target, Cp, ChangesManager,
             ?xdcr_trace("Worker reported completion of seq ~p, num docs written: ~p "
                         "data replicated: ~p bytes, latency: ~p ms.",
                         [ReportSeq, NumWritten, DataRepd, DocLatency]),
-            queue_fetch_loop(WorkerID, Source, Target, Cp, ChangesManager,
+            queue_fetch_loop(WorkerID, Target, Cp, ChangesManager,
                              OptRepThreshold, BatchSize, BatchItems, XMemLoc)
     end.
 
 
-local_process_batch([], _Cp, _Src, _Tgt, #batch{docs = []}, _BatchSize, _BatchItems, _XMemLoc) ->
+local_process_batch([], _Cp, _Tgt, #batch{docs = []}, _BatchSize, _BatchItems, _XMemLoc) ->
     {ok, 0};
-local_process_batch([], Cp, #db{} = Source, #httpdb{} = Target,
+local_process_batch([], Cp, #httpdb{} = Target,
                     #batch{docs = Docs, size = Size}, BatchSize, BatchItems, XMemLoc) ->
     ?xdcr_trace("worker process flushing a batch docs of total size ~p bytes",
                 [Size]),
     ok = flush_docs_helper(Target, Docs, XMemLoc),
-    {ok, DataRepd1} = local_process_batch([], Cp, Source, Target, #batch{}, BatchSize, BatchItems, XMemLoc),
+    {ok, DataRepd1} = local_process_batch([], Cp, Target, #batch{}, BatchSize, BatchItems, XMemLoc),
     {ok, DataRepd1 + Size};
 
-local_process_batch([DocInfo | Rest], Cp, #db{} = Source,
+local_process_batch([Mutation | Rest], Cp,
                     #httpdb{} = Target, Batch, BatchSize, BatchItems, XMemLoc) ->
-    {ok, {_, DocsList, _}} = fetch_doc(
-                                      Source, DocInfo, fun local_doc_handler/2,
-                                      {Target, [], Cp}),
-    {Batch2, DataFlushed} = lists:foldl(
-                         fun(Doc, {Batch0, DataFlushed1}) ->
-                                 maybe_flush_docs(Target, Batch0, Doc, DataFlushed1, BatchSize, BatchItems, XMemLoc)
-                         end,
-                         {Batch, 0}, DocsList),
-    {ok, DataFlushed2} = local_process_batch(Rest, Cp, Source, Target, Batch2, BatchSize, BatchItems, XMemLoc),
+    #upr_mutation{id = Key,
+                  rev = Rev,
+                  body = Body,
+                  deleted = Deleted} = Mutation,
+    Doc0 = couch_doc:from_binary(Key, Body, true),
+    Doc = Doc0#doc{rev = Rev,
+                   deleted = Deleted},
+    {Batch2, DataFlushed} = maybe_flush_docs(Target, Batch, Doc, 0, BatchSize, BatchItems, XMemLoc),
+    {ok, DataFlushed2} = local_process_batch(Rest, Cp, Target, Batch2, BatchSize, BatchItems, XMemLoc),
     %% return total data flushed
     {ok, DataFlushed + DataFlushed2}.
 
-
-%% fetch doc using doc info
-fetch_doc(Source, #doc_info{body_ptr = _BodyPtr} = DocInfo, DocHandler, Acc) ->
-    couch_api_wrap:open_doc(Source, DocInfo, [deleted], DocHandler, Acc).
-
-local_doc_handler({ok, Doc}, {Target, DocsList, Cp}) ->
-    {ok, {Target, [Doc | DocsList], Cp}};
-local_doc_handler(_, Acc) ->
-    {ok, Acc}.
 
 -spec maybe_flush_docs(#httpdb{}, #batch{}, #doc{}, integer(), integer(), integer(), term()) ->
                               {#batch{}, integer()}.
@@ -172,8 +162,9 @@ find_missing(DocInfos, Target, OptRepThreshold, XMemLoc) ->
     %% smaller than or equal to threshold.
     {BigDocIdRevs, SmallDocIdRevs, DelCount, BigDocCount,
      SmallDocCount, AllRevsCount} = lists:foldr(
-                                      fun(#doc_info{id = Id, rev = Rev, deleted = Deleted, size = DocSize},
+                                      fun(#upr_mutation{id = Id, rev = Rev, deleted = Deleted, body = Body},
                                           {BigIdRevAcc, SmallIdRevAcc, DelAcc, BigAcc, SmallAcc, CountAcc}) ->
+                                              DocSize = erlang:size(Body),
                                               %% deleted doc is always treated as small doc, regardless of doc size
                                               {BigIdRevAcc1, SmallIdRevAcc1, DelAcc1, BigAcc1, SmallAcc1} =
                                                   case Deleted of
@@ -207,7 +198,7 @@ find_missing(DocInfos, Target, OptRepThreshold, XMemLoc) ->
 
     %% build list of docinfo for all missing keys
     MissingDocInfoList = lists:filter(
-                           fun(#doc_info{id = Id, rev = _Rev} = _DocInfo) ->
+                           fun(#upr_mutation{id = Id}) ->
                                    case lists:keyfind(Id, 1, Missing) of
                                        %% not a missing key
                                        false ->
@@ -219,19 +210,7 @@ find_missing(DocInfos, Target, OptRepThreshold, XMemLoc) ->
                            DocInfos),
 
     %% latency in millisecond
-    TotalLatency = round(timer:now_diff(now(), Start) div 1000),
-    Latency = case XMemLoc of
-                  nil ->
-                      TotalLatency;
-                  _ ->
-                      %% xmem is single doc based
-                      try (TotalLatency div BigDocCount) of
-                          X -> X
-                      catch
-                          error:badarith -> 0
-                      end
-              end,
-
+    Latency = round(timer:now_diff(now(), Start) div 1000),
 
     RepMode = case XMemLoc of
                   nil ->

@@ -20,7 +20,7 @@
 -export([start_timer/1, cancel_timer/1]).
 -export([do_checkpoint/1]).
 -export([read_validate_checkpoint/3]).
--export([get_local_vbuuid/2]).
+-export([get_failover_id/2]).
 
 -include("xdc_replicator.hrl").
 
@@ -85,29 +85,30 @@ do_checkpoint(State) ->
                    total_docs_written = TotalWritten,
                    total_data_replicated = TotalDataRepd} = OldStatus = State#rep_state.status,
 
-    SourceBucketName = (State#rep_state.rep_details)#rep.source,
-    OldLocalVBUUID = State#rep_state.local_vbuuid,
-    LocalVBUUID = get_local_vbuuid(SourceBucketName, Vb),
+    {FailoverUUID, FailoverSeq} = State#rep_state.upr_failover_id,
 
-    CommitResult = case LocalVBUUID =:= OldLocalVBUUID of
-                       true ->
-                           catch perform_commit_for_checkpoint(State#rep_state.remote_vbopaque,
-                                                               State#rep_state.target);
-                       false ->
-                           {local_vbuuid_mismatch, LocalVBUUID, OldLocalVBUUID}
-                   end,
+    SourceBucketName = (State#rep_state.rep_details)#rep.source,
+
+    %% NOTE: we don't need to check if source still has all the
+    %% replicated stuff. upr failover id + seqnos already represent it
+    %% well enough. And if any of that is lost, upr will automatically
+    %% rollback to a place that's safe to restart replication from.
+
+    CommitResult = (catch perform_commit_for_checkpoint(State#rep_state.remote_vbopaque,
+                                                        State#rep_state.target)),
 
     case CommitResult of
         {ok, RemoteCommitOpaque} ->
-
-
             CheckpointDocId = build_commit_doc_id(State#rep_state.rep_details, Vb),
             NewSeq = State#rep_state.current_through_seq,
+            NewSnapshotSeq = State#rep_state.current_through_snapshot_seq,
             CheckpointDoc = {[{<<"commitopaque">>, RemoteCommitOpaque},
                               {<<"start_time">>, ?l2b(State#rep_state.rep_starttime)},
                               {<<"end_time">>, ?l2b(httpd_util:rfc1123_date())},
-                              {<<"local_vbuuid">>, LocalVBUUID},
+                              {<<"failover_uuid">>, FailoverUUID},
+                              {<<"failover_seq">>, FailoverSeq},
                               {<<"seqno">>, NewSeq},
+                              {<<"upr_snapshot_seqno">>, NewSnapshotSeq},
                               {<<"total_docs_checked">>, TotalChecked + Checked},
                               {<<"total_docs_written">>, TotalWritten + Written},
                               {<<"total_data_replicated">>, TotalDataRepd + DataRepd}]},
@@ -192,7 +193,7 @@ send_post(Method, RemoteVBOpaque, RemoteCommitOpaque, HttpDB) ->
 
 build_commit_doc_id(Rep, Vb) ->
     CheckpointDocId0 = iolist_to_binary(couch_httpd:quote(iolist_to_binary([Rep#rep.id, $/, integer_to_list(Vb)]))),
-    <<"_local/ck-", CheckpointDocId0/binary>>.
+    <<"_local/30-ck-", CheckpointDocId0/binary>>.
 
 
 perform_commit_for_checkpoint(RemoteVBOpaque, HttpDB) ->
@@ -264,7 +265,7 @@ handle_no_checkpoint_with_opaque(RemoteVBOpaque) ->
     TotalDocsChecked = 0,
     TotalDocsWritten = 0,
     TotalDataReplicated = 0,
-    {StartSeq,
+    {StartSeq, 0, {0, 0},
      TotalDocsChecked,
      TotalDocsWritten,
      TotalDataReplicated,
@@ -285,40 +286,43 @@ do_parse_validate_checkpoint_doc(Rep, Vb, Body0, TargetHttpDB) ->
                _ -> []
            end,
     CommitOpaque = proplists:get_value(<<"commitopaque">>, Body),
-    LocalVBUUID = proplists:get_value(<<"local_vbuuid">>, Body),
+    FailoverUUID = proplists:get_value(<<"failover_uuid">>, Body),
+    FailoverSeq = proplists:get_value(<<"failover_seq">>, Body),
     Seqno = proplists:get_value(<<"seqno">>, Body),
+    SnapshotSeq = proplists:get_value(<<"upr_snapshot_seqno">>, Body),
     case (CommitOpaque =/= undefined andalso
-          is_binary(LocalVBUUID) andalso
-          is_integer(Seqno)) of
+          is_integer(FailoverUUID) andalso
+          is_integer(FailoverSeq) andalso
+          is_integer(Seqno) andalso
+          is_integer(SnapshotSeq)) of
         false ->
             handle_no_checkpoint(TargetHttpDB);
         true ->
-            case get_local_vbuuid(Rep#rep.source, Vb) =:= LocalVBUUID of
-                false ->
-                    ?xdcr_debug("local checkpoint for vb ~B does not match due to local side. Checkpoint seqno: ~B. xdcr will start from scratch", [Vb, Seqno]),
-                    handle_no_checkpoint(TargetHttpDB);
+            case get_failover_id(Rep#rep.source, Vb) =/= {FailoverUUID, FailoverSeq} of
                 true ->
-                    case perform_pre_replicate(CommitOpaque, TargetHttpDB) of
-                        {mismatch, RemoteVBOpaque} ->
-                            ?xdcr_debug("local checkpoint for vb ~B does not match due to remote side. Checkpoint seqno: ~B. xdcr will start from scratch", [Vb, Seqno]),
-                            handle_no_checkpoint_with_opaque(RemoteVBOpaque);
-                        {ok, RemoteVBOpaque} ->
-                            ?xdcr_debug("local checkpoint for vb ~B matches. Seqno: ~B", [Vb, Seqno]),
-                            StartSeq = Seqno,
-                            TotalDocsChecked = proplists:get_value(<<"total_docs_checked">>, Body, 0),
-                            TotalDocsWritten = proplists:get_value(<<"total_docs_written">>, Body, 0),
-                            TotalDataReplicated = proplists:get_value(<<"total_data_replicated">>, Body, 0),
-                            ?xdcr_debug("Checkpoint stats: ~p", [{TotalDocsChecked, TotalDocsWritten, TotalDataReplicated}]),
-                            {StartSeq,
-                             TotalDocsChecked,
-                             TotalDocsWritten,
-                             TotalDataReplicated,
-                             RemoteVBOpaque}
-                    end
+                    ?xdcr_debug("local checkpoint for vb ~B does not match due to local side. Checkpoint seqno: ~B. But will still let upr producer decide on true start seqno", [Vb, Seqno]),
+                    ok;
+                false ->
+                    ok
+            end,
+            case perform_pre_replicate(CommitOpaque, TargetHttpDB) of
+                {mismatch, RemoteVBOpaque} ->
+                    ?xdcr_debug("local checkpoint for vb ~B does not match due to remote side. Checkpoint seqno: ~B. xdcr will start from scratch", [Vb, Seqno]),
+                    handle_no_checkpoint_with_opaque(RemoteVBOpaque);
+                {ok, RemoteVBOpaque} ->
+                    ?xdcr_debug("local checkpoint for vb ~B matches. Seqno: ~B", [Vb, Seqno]),
+                    StartSeq = Seqno,
+                    TotalDocsChecked = proplists:get_value(<<"total_docs_checked">>, Body, 0),
+                    TotalDocsWritten = proplists:get_value(<<"total_docs_written">>, Body, 0),
+                    TotalDataReplicated = proplists:get_value(<<"total_data_replicated">>, Body, 0),
+                    ?xdcr_debug("Checkpoint stats: ~p", [{TotalDocsChecked, TotalDocsWritten, TotalDataReplicated}]),
+                    {StartSeq, SnapshotSeq, {FailoverUUID, FailoverSeq},
+                     TotalDocsChecked,
+                     TotalDocsWritten,
+                     TotalDataReplicated,
+                     RemoteVBOpaque}
             end
     end.
 
-get_local_vbuuid(BucketName, Vb) ->
-    {ok, KV} = ns_memcached:stats(couch_util:to_list(BucketName), io_lib:format("vbucket-seqno ~B", [Vb])),
-    Key = iolist_to_binary(io_lib:format("vb_~B:uuid", [Vb])),
-    misc:expect_prop_value(Key, KV).
+get_failover_id(BucketName, Vb) ->
+    lists:last(xdcr_upr_streamer:get_failover_log(couch_util:to_list(BucketName), Vb)).
