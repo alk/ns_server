@@ -678,7 +678,7 @@ start_replication(#rep_state{
                      current_through_seq = StartSeq,
                      last_checkpoint_time = LastCkptTime,
                      status = #rep_vb_status{vb = Vb},
-                     rep_details = #rep{id = Id, options = Options, target = TargetRef},
+                     rep_details = #rep{id = Id, options = Options, source = SourceBucket, target = TargetRef},
                      xmem_remote = Remote
                     } = State) ->
 
