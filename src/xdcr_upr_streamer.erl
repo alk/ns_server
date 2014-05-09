@@ -166,6 +166,14 @@ start(Socket, Vb, FailoverId, FailoverSeqno, LastSnapshotSeqno, StartSeqno, Call
 
 do_start(Socket, Vb, FailoverId, FailoverSeqno, RealStartSeqno, HighSeqno, Callback, Acc, Parent, HadRollback, LastSnapshotSeqno) ->
     Opaque = 16#fafafafa,
+
+    ok = gen_tcp:send(Socket, encode_req(#upr_packet{opcode = ?UPR_CONTROL,
+                                                     opaque = Opaque+1,
+                                                     key = <<"connection_buffer_size">>,
+                                                     body = iolist_to_binary(integer_to_list(?BUFFER_SIZE))})),
+    {res, #upr_packet{opaque = Opaque1}, <<>>} = read_message_loop(Socket, <<>>),
+    Opaque1 = Opaque + 1,
+
     SReq = build_stream_request_packet(Vb, Opaque, RealStartSeqno, HighSeqno, FailoverId, FailoverSeqno),
     ok = gen_tcp:send(Socket, encode_req(SReq)),
 
@@ -180,6 +188,7 @@ do_start(Socket, Vb, FailoverId, FailoverSeqno, RealStartSeqno, HighSeqno, Callb
             ?log_debug("Sockname: ~p", [inet:sockname(Socket)]),
             Parent ! {failover_id, lists:last(FailoverLog), LastSnapshotSeqno, RealStartSeqno, HighSeqno},
             proc_lib:init_ack({ok, self()}),
+
             socket_loop_enter(Socket, Callback, Acc, Data0, Parent);
         #upr_packet{status = ?ROLLBACK, body = <<RollbackSeq:64>>} ->
             ?log_debug("handling rollback to ~B", [RollbackSeq]),
@@ -251,10 +260,16 @@ respond_nop(Socket, Opaque) ->
     ok = gen_tcp:send(Socket, encode_res(Packet)).
 
 socket_loop_enter(Socket, Callback, Acc, Data, Consumer) ->
-    self() ! {tcp, Socket, Data},
-    socket_loop(Socket, Callback, Acc, <<>>, 0, Consumer, 0).
+    case Data of
+        <<>> ->
+            ok;
+        _ ->
+            self() ! {tcp, Socket, Data}
+    end,
+    inet:setopts(Socket, [{active, true}]),
+    socket_loop(Socket, Callback, Acc, <<>>, 0, Consumer).
 
-socket_loop(Socket, Callback, Acc, Data, ScannedPos, Consumer, SentToConsumer) ->
+socket_loop(Socket, Callback, Acc, Data, ScannedPos, Consumer) ->
     %% ?log_debug("socket_loop: ~p", [{ScannedPos, SentToConsumer}]),
     Msg = receive
               XMsg ->
@@ -263,17 +278,9 @@ socket_loop(Socket, Callback, Acc, Data, ScannedPos, Consumer, SentToConsumer) -
     %% ?log_debug("Data: ~p, ScannedPos: ~p, Msg: ~p", [Data, ScannedPos, Msg]),
     case Msg of
         ConsumedBytes when is_integer(ConsumedBytes) ->
-            %% TODO: send window update msg when ep-engine side is ready
-            NewSentToConsumer = SentToConsumer - ConsumedBytes,
-            {true, NewSentToConsumer, ConsumedBytes} = {(NewSentToConsumer >= 0), NewSentToConsumer, ConsumedBytes},
-            if
-                NewSentToConsumer < (?BUFFER_SIZE div 3) andalso SentToConsumer >= (?BUFFER_SIZE div 3) ->
-                    %% ?log_debug("Enabled in-flow"),
-                    inet:setopts(Socket, [{active, once}]);
-                true ->
-                    ok
-            end,
-            socket_loop(Socket, Callback, Acc, Data, ScannedPos, Consumer, NewSentToConsumer);
+            ok = gen_tcp:send(Socket, encode_req(#upr_packet{opcode = ?UPR_WINDOW_UPDATE,
+                                                             body = <<ConsumedBytes:32/big>>})),
+            socket_loop(Socket, Callback, Acc, Data, ScannedPos, Consumer);
         {tcp_closed, MustSocket} ->
             {tcp_closed_socket, Socket} = {tcp_closed_socket, MustSocket},
             erlang:error(premature_socket_closure);
@@ -288,16 +295,7 @@ socket_loop(Socket, Callback, Acc, Data, ScannedPos, Consumer, SentToConsumer) -
                 _ ->
                     ok
             end,
-            NewSentToConsumer = SentToConsumer + erlang:size(ScannedData),
-            if
-                NewSentToConsumer > (2 * ?BUFFER_SIZE div 3) andalso SentToConsumer =< (2 * ?BUFFER_SIZE div 3) ->
-                    ?log_debug("Disabled in-flow"),
-                    inet:setopts(Socket, [{active, false}]);
-                true ->
-                    %% timer:sleep(100),
-                    inet:setopts(Socket, [{active, once}])
-            end,
-            socket_loop(Socket, Callback, Acc, UnscannedData, 0, Consumer, NewSentToConsumer);
+            socket_loop(Socket, Callback, Acc, UnscannedData, 0, Consumer);
         done ->
             {<<>>, 0} = {Data, ScannedPos},
             ok;
@@ -355,12 +353,15 @@ consumer_loop_exit(Child, DoneOrStop) ->
     misc:wait_for_process(Child, infinity),
     case DoneOrStop of
         done ->
-            receive
-                EvenMoreData when is_binary(EvenMoreData) ->
-                    erlang:error({unexpected_stuff_after_stream_end, erlang:size(EvenMoreData)})
-            after 0 ->
-                    ok
-            end;
+            %%% TODO
+
+            %% receive
+            %%     EvenMoreData when is_binary(EvenMoreData) ->
+            %%         erlang:error({unexpected_stuff_after_stream_end, erlang:size(EvenMoreData)})
+            %% after 0 ->
+            %%         ok
+            %% end;
+            ok;
         stop ->
             consume_aborted_stuff()
     end.
@@ -381,7 +382,8 @@ consume_stuff(Callback, Acc, MoreData, LastSnapshotSeqno, LastSeenSeqno) ->
             case do_callback(Type, Packet, Callback, Acc, LastSnapshotSeqno, LastSeenSeqno) of
                 {normal_stop, {MustBeStop, RV}} ->
                     stop = MustBeStop,
-                    <<>> = RestData,
+                    %% TODO
+                    %% <<>> = RestData,
                     {done, RV};
                 {stop, RV} ->
                     {stop, RV};
@@ -440,9 +442,7 @@ do_callback(Type, Packet, Callback, Acc, LastSnapshotSeqno, LastSeenSeqno) ->
                     ok;
                 ?UPR_WINDOW_UPDATE ->
                     {window, res} = {window, Type},
-                    ok;
-                ?UPR_FLOW_CONTROL_SETUP ->
-                    {setup, res} = {setup, Type},
+                    {success, 0} = {success, Packet#upr_packet.status},
                     ok
             end,
             {ok, Acc, LastSnapshotSeqno, LastSeenSeqno}
