@@ -516,18 +516,20 @@ test() ->
                  case Packet of
                      {failover_id, _FID, _, _, _} ->
                          {ok, Acc};
-                     {stream_end, _, _} = _Msg ->
-                         %% ?log_debug("StreamEnd: ~p", [Msg]),
-                         {stop, lists:reverse(Acc)};
+                     {stream_end, _, _} = Msg ->
+                         ?log_debug("StreamEnd: ~p", [Msg]),
+                         %% {stop, lists:reverse(Acc)};
+                         {stop, Acc};
                      _ ->
                          %% NewAcc = [Packet|Acc],
-                         NewAcc = Acc,
-                         case length(NewAcc) >= 10 of
-                             true ->
-                                 {stop, {aborted, NewAcc}};
-                             _ ->
-                                 {ok, NewAcc}
-                         end
+                         %% NewAcc = Acc,
+                         %% case length(NewAcc) >= 10 of
+                         %%     true ->
+                         %%         {stop, {aborted, NewAcc}};
+                         %%     _ ->
+                         %%         {ok, NewAcc}
+                         %% end
+                         {ok, Packet}
                  end
          end,
     stream_vbucket("default", 0, 16#123123, 0, 1, 2, Cb, []).
