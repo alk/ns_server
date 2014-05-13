@@ -1259,8 +1259,11 @@ connect(Tries) ->
     User = ns_config:search_node_prop(Config, memcached, admin_user),
     Pass = ns_config:search_node_prop(Config, memcached, admin_pass),
     try
-        {ok, S} = gen_tcp:connect("127.0.0.1", Port,
-                                  [binary, {packet, 0}, {active, false}]),
+        {_, H} = misc:node_name_host(node()),
+        {ok, S} = gen_tcp:connect(H, Port,
+                                  [binary, {packet, 0}, {active, false},
+                                   {recbuf, 10*1024*1024},
+                                   {sndbuf, 10*1024*1024}]),
         ok = mc_client_binary:auth(S, {<<"PLAIN">>,
                                        {list_to_binary(User),
                                         list_to_binary(Pass)}}),
