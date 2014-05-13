@@ -23,7 +23,7 @@
 
 -export([stream_vbucket/8, get_failover_log/2]).
 
--export([test/0]).
+-export([test/0, test0/0]).
 
 -export([encode_req/1, encode_res/1, decode_packet/1]).
 
@@ -510,6 +510,57 @@ get_failover_log(Bucket, VB) ->
       end).
 
 
+stream_vbucket2(Bucket, Vb, FailoverId, FailoverSeqno, LastSnapshotSeqno, StartSeqno, Callback, Acc) ->
+    true = is_list(Bucket),
+    {ok, S} = xdcr_upr_sockets_pool:take_socket(Bucket),
+    Acc2 = stream_vbucket2_inner(S, Vb, FailoverId, FailoverSeqno, LastSnapshotSeqno, StartSeqno, Callback, Acc),
+    ok = xdcr_upr_sockets_pool:put_socket(Bucket, S),
+    Acc2.
+
+stream_vbucket2_inner(S, Vb, FailoverId, FailoverSeqno, _LastSnapshotSeqno, _StartSeqno, Callback, Acc) ->
+    Opaque = 16#fafafafa,
+
+    {_VBUUID, HighSeqno} = find_high_seqno(S, Vb),
+
+    SReq = build_stream_request_packet(Vb, Opaque, 0, HighSeqno, FailoverId, FailoverSeqno),
+    ok = gen_tcp:send(S, encode_req(SReq)),
+
+    %% NOTE: Opaque is already bound
+    {res, #upr_packet{opaque = Opaque} = Packet, Data0} = read_message_loop(S, <<>>),
+
+    case Packet of
+        #upr_packet{status = ?SUCCESS, body = FailoverLogBin} ->
+            FailoverLog = unpack_failover_log(FailoverLogBin),
+            ?log_debug("FailoverLog: ~p", [FailoverLog]),
+            ?log_debug("Request was: ~p", [{Vb, Opaque, 0, HighSeqno, FailoverId, FailoverSeqno}]),
+            ?log_debug("Sockname: ~p", [inet:sockname(S)]),
+            %% Parent ! {failover_id, lists:last(FailoverLog), LastSnapshotSeqno, RealStartSeqno, HighSeqno},
+            proc_lib:init_ack({ok, self()}),
+
+            stream_vbucket2_loop(S, Callback, Acc, Data0);
+        #upr_packet{status = ?ROLLBACK, body = <<RollbackSeq:64>>} ->
+            ?log_debug("handling rollback to ~B", [RollbackSeq]),
+            ?log_debug("Request was: ~p", [{Vb, Opaque, 0, HighSeqno, FailoverId, FailoverSeqno}]),
+            stream_vbucket2_inner(S, Vb, FailoverId, FailoverSeqno, RollbackSeq, HighSeqno, Callback, Acc)
+    end.
+
+stream_vbucket2_loop(Socket, Callback, Acc, Data0) ->
+    case decode_packet(Data0) of
+        {Type, Packet, Rest} ->
+            case do_callback(Type, Packet, Callback, Acc, 0, 0) of
+                {ok, Acc2, _, _} ->
+                    stream_vbucket2_loop(Socket, Callback, Acc2, Rest);
+                {normal_stop, RV} ->
+                    <<>> = Rest,
+                    RV
+            end;
+        _Data0 ->
+            {ok, Data1} = prim_inet:recv(Socket, 0),
+            stream_vbucket2_loop(Socket, Callback, Acc, <<Data0/binary, Data1/binary>>)
+    end.
+
+
+
 test() ->
     Cb = fun (Packet, Acc) ->
                  %% ?log_debug("packet: ~p", [Packet]),
@@ -532,4 +583,29 @@ test() ->
                          {ok, Packet}
                  end
          end,
-    stream_vbucket("default", 0, 16#123123, 0, 1, 2, Cb, []).
+    {stream_vbucket2("default", 0, 16#123123, 0, 1, 2, Cb, []),
+     diag_handler:grab_process_info(self())}.
+
+test0() ->
+    Cb = fun (Packet, Acc) ->
+                 %% ?log_debug("packet: ~p", [Packet]),
+                 case Packet of
+                     {failover_id, _FID, _, _, _} ->
+                         {ok, Acc};
+                     {stream_end, _, _} = Msg ->
+                         ?log_debug("StreamEnd: ~p", [Msg]),
+                         %% {stop, lists:reverse(Acc)};
+                         {stop, Acc};
+                     _ ->
+                         %% NewAcc = [Packet|Acc],
+                         %% NewAcc = Acc,
+                         %% case length(NewAcc) >= 10 of
+                         %%     true ->
+                         %%         {stop, {aborted, NewAcc}};
+                         %%     _ ->
+                         %%         {ok, NewAcc}
+                         %% end
+                         {ok, Packet}
+                 end
+         end,
+    {stream_vbucket("default", 0, 16#123123, 0, 1, 2, Cb, []), diag_handler:grab_process_info(self())}.
