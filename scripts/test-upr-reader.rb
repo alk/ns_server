@@ -15,6 +15,28 @@ class IO
   end
 end
 
+module MCStatus
+  # Response status codes.
+  SUCCESS          = 0x00
+  KEY_ENOENT       = 0x01
+  KEY_EEXISTS      = 0x02
+  E2BIG            = 0x03
+  EINVAL           = 0x04
+  NOT_STORED       = 0x05
+  DELTA_BADVAL     = 0x06
+  NOT_MY_VBUCKET   = 0x07
+  MC_AUTH_ERROR    = 0x20
+  MC_AUTH_CONTINUE = 0x21
+  ERANGE           = 0x22
+  ROLLBACK         = 0x23
+  UNKNOWN_COMMAND  = 0x81
+  ENOMEM           = 0x82
+  NOT_SUPPORTED    = 0x83
+  EINTERNAL        = 0x84
+  EBUSY            = 0x85
+  ETMPFAIL         = 0x86
+end
+
 class UprRequest
   def status
     self.vbucket
@@ -71,7 +93,7 @@ class UprRequest
      bodylen,
      opaque,
      cas) = hdr = io.read_full(24).unpack(HDR_PACK)
-    p hdr
+    # p hdr
     fullbody = io.read_full(bodylen).force_encoding(Encoding::ASCII_8BIT)
     raise "premature eof #{fullbody.inspect} #{bodylen} #{fullbody.bytesize}" unless fullbody.bytesize == bodylen
     ext = fullbody[0...extlen]
@@ -99,11 +121,17 @@ r = UprRequest.from_hash(:opcode => UprRequest::UPR_OPEN,
                          :key => "asdasd",
                          :ext => [1].pack("Q>")) # producer
 
-p r
+# p r
 
-IO.popen("hd", "w") {|f| f << r.pack}
+# IO.popen("hd", "w") {|f| f << r.pack}
 
 s << r.pack
+
+v = UprRequest.read(s)
+
+p v
+
+raise unless v.opcode == UprRequest::UPR_OPEN && v.magic == 129 && v.status == 0
 
 # build_stream_request_packet(Vb, Opaque, StartSeqno, EndSeqno, VBUUID, VBUUIDSeqno) ->
 #     Extra = <<0:64, StartSeqno:64, EndSeqno:64, VBUUID:64, VBUUIDSeqno:64>>,
@@ -112,7 +140,39 @@ s << r.pack
 #                 opaque = Opaque,
 #                 ext = Extra}.
 
+def build_stream_request_packet(vb, opaque, start_seqno, end_seqno, vbuuid, vbuuidseqno)
+  ext = [0, start_seqno, end_seqno, vbuuid, vbuuidseqno].pack("Q>Q>Q>Q>Q>")
+  UprRequest.from_hash(:opcode => UprRequest::UPR_STREAM_REQ,
+                       :opaque => 0xafafafaf,
+                       :ext => ext)
+end
+
+r = build_stream_request_packet(0, 0xafafafaf, 0, 10000000, 0x123123, 0)
+
+t_start = Time.now
+
+s << r.pack
+
+sleep(1)
 
 v = UprRequest.read(s)
 
 p v
+
+raise unless v.opcode == UprRequest::UPR_STREAM_REQ && v.magic == 129 && v.status == 0
+
+str = ""
+
+seen = 0
+
+trap(:INT) {puts "seen: #{seen}, time: #{Time.now.to_f - t_start.to_f}"; exit}
+
+while s.readpartial(1024*1024, str)
+  old_seen = seen
+  seen += str.bytesize
+  if (old_seen >> 18) != (seen >> 18)
+    # print "."; STDOUT.flush
+    STDOUT.syswrite(".")
+  end
+end
+
