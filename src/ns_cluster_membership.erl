@@ -15,6 +15,8 @@
 %%
 -module(ns_cluster_membership).
 
+-include("ns_common.hrl").
+
 -export([active_nodes/0,
          active_nodes/1,
          actual_active_nodes/0,
@@ -35,7 +37,7 @@
          get_rebalance_status/0,
          is_balanced/0,
          get_recovery_type/2,
-         update_recovery_type/2
+         update_recovery_type/3
         ]).
 
 active_nodes() ->
@@ -170,23 +172,29 @@ re_failover(NodeString) ->
 get_recovery_type(Config, Node) ->
     ns_config:search(Config, {node, Node, recovery_type}, none).
 
--spec update_recovery_type(node(), delta | full) -> ok | bad_node | conflict.
-update_recovery_type(Node, NewType) ->
+-spec update_recovery_type(node(), delta | full, inactiveFailed | inactiveAdded) -> ok | bad_node | conflict.
+update_recovery_type(Node, NewType, FromMembership) ->
     RV = ns_config:run_txn(
            fun (Config, Set) ->
                    Membership = ns_config:search(Config, {node, Node, membership}),
                    CurrentType = get_recovery_type(Config, Node),
 
-                   case Membership =:= {value, inactiveAdded} andalso
-                       CurrentType =/= none of
+                   OkType = case FromMembership of
+                                inactiveAdded ->
+                                    CurrentType =/= none;
+                                inactiveFailed ->
+                                    true
+                            end,
 
+                   case Membership =:= {value, FromMembership} andalso OkType of
                        true ->
-                           case CurrentType =:= NewType of
+                           case CurrentType =:= NewType andalso Membership =:= inactiveAdded of
                                true ->
                                    {abort, not_needed};
                                false ->
+                                   Config1 = Set({node, Node, membership}, inactiveAdded, Config),
                                    {commit,
-                                    Set({node, Node, recovery_type}, NewType, Config)}
+                                    Set({node, Node, recovery_type}, NewType, Config1)}
                            end;
                        false ->
                            {abort, {error, bad_node}}

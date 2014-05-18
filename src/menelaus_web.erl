@@ -2566,9 +2566,19 @@ handle_stop_rebalance(Req) ->
 
 handle_re_add_node(Req) ->
     Params = Req:parse_post(),
-    Node = list_to_atom(proplists:get_value("otpNode", Params, "undefined")),
-    ok = ns_cluster_membership:re_add_node(Node),
-    reply(Req, 200).
+    RecoveryType = proplists:get_value("recoveryType", Params),
+    case (catch list_to_atom(proplists:get_value("otpNode", Params, "undefined"))) of
+        Node when is_atom(Node) ->
+            case RecoveryType =:= undefined of
+                true ->
+                    ok = ns_cluster_membership:re_add_node(Node),
+                    reply(Req, 200);
+                _ ->
+                    handle_set_recovery_type(Req, inactiveFailed)
+            end;
+        _ ->
+            reply(Req, 400)
+    end.
 
 handle_re_failover(Req) ->
     Params = Req:parse_post(),
@@ -3248,9 +3258,12 @@ serve_streaming_short_bucket_info(_PoolId, BucketName, Req) ->
       end, Req, undefined).
 
 handle_set_recovery_type(Req) ->
+    handle_set_recovery_type(Req, inactiveAdded).
+
+handle_set_recovery_type(Req, FromMembership) ->
     case cluster_compat_mode:is_cluster_30() of
         true ->
-            do_handle_set_recovery_type(Req);
+            do_handle_set_recovery_type(Req, FromMembership);
         false ->
             reply_not_found(Req)
     end.
@@ -3262,7 +3275,7 @@ decode_recovery_type("full") ->
 decode_recovery_type(_) ->
     undefined.
 
-do_handle_set_recovery_type(Req) ->
+do_handle_set_recovery_type(Req, FromMembership) ->
     Params = Req:parse_post(),
     NodeStr = proplists:get_value("otpNode", Params),
 
@@ -3293,11 +3306,11 @@ do_handle_set_recovery_type(Req) ->
 
     case Errors of
         [] ->
-            case ns_cluster_membership:update_recovery_type(Node, Type) of
+            case ns_cluster_membership:update_recovery_type(Node, Type, FromMembership) of
                 ok ->
                     reply_json(Req, [], 200);
                 bad_node ->
-                    reply_json(Req, {struct, [{otpNode, OtpNodeErrorMsg}]}, 400)
+                    reply_json(Req, {struct, [{otpNode, <<"asdasd">>}]}, 400)
             end;
         _ ->
             reply_json(Req, {struct, Errors}, 400)
