@@ -292,20 +292,18 @@ build_bucket_info(Id, BucketConfig, InfoLevel, LocalAddr, MayExposeAuth) ->
               | Suffix3]}.
 
 build_bucket_capabilities(BucketConfig) ->
-    Caps0 =
+    Caps =
         case ns_bucket:bucket_type(BucketConfig) of
             membase ->
-                [touch, couchapi];
+                case cluster_compat_mode:is_cluster_30() of
+                    true ->
+                        [datatype, touch, couchapi];
+                    _ ->
+                        [touch, couchapi]
+                end;
             memcached ->
                 []
         end,
-
-    Caps = case cluster_compat_mode:is_cluster_30() of
-               true ->
-                   [datatype | Caps0];
-               _ ->
-                   Caps0
-           end,
 
     [{bucketCapabilitiesVer, ''},
      {bucketCapabilities, Caps}].
