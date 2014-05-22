@@ -192,9 +192,9 @@
 
 %% datatypes enum
 -define(MC_DATATYPE_RAW_BYTES,      16#00).
--define(MC_DATATYPE_JSON            16#01).
--define(MC_DATATYPE_COMPRESSED      16#02).
--define(MC_DATATYPE_COMPRESSED_JSON 16#03).
+-define(MC_DATATYPE_JSON,           16#01).
+-define(MC_DATATYPE_COMPRESSED,     16#02).
+-define(MC_DATATYPE_COMPRESSED_JSON,16#03).
 
 %% hello features
 -define(MC_FEATURE_DATATYPE, 16#01).
