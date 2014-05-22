@@ -117,7 +117,11 @@ local_process_batch([Mutation | Rest], Cp,
                                deleted = Deleted},
                 maybe_flush_docs_capi(Target, Batch, Doc, 0, BatchSize, BatchItems);
             _ ->
-                maybe_flush_docs_xmem(XMemLoc, Batch, Mutation, 0, BatchSize, BatchItems)
+                Doc = #doc{id = Key,
+                       rev = Rev,
+                       deleted = Deleted,
+                       body = Body},
+                maybe_flush_docs_xmem(XMemLoc, Batch, Doc, 0, BatchSize, BatchItems)
         end,
     {ok, DataFlushed2} = local_process_batch(Rest, Cp, Target, Batch2, BatchSize, BatchItems, XMemLoc),
     %% return total data flushed
