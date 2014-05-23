@@ -104,16 +104,12 @@ local_process_batch([Mutation | Rest], Cp,
                     #httpdb{} = Target, Batch, BatchSize, BatchItems, XMemLoc, Acc) ->
     #upr_mutation{id = Key,
                   local_seq = KeySeq,
-                  rev = {RevA, _RevB} = Rev,
-                  body = Body,
-                  deleted = Deleted} = Mutation,
+                  rev = {RevA, _RevB}} = Mutation,
     ?xdcr_trace("added mutation ~s@~B (rev = ~B-..) to outgoing batch", [Key, KeySeq, RevA]),
     {Batch2, DataFlushed} =
         case XMemLoc of
             nil ->
-                Doc0 = couch_doc:from_binary(Key, Body, true),
-                Doc = Doc0#doc{rev = Rev,
-                               deleted = Deleted},
+                Doc = xdc_rep_utils:upr_mutation_to_capi_doc(Mutation),
                 maybe_flush_docs_capi(Target, Batch, Doc, BatchSize, BatchItems);
             _ ->
                 maybe_flush_docs_xmem(XMemLoc, Batch, Mutation, BatchSize, BatchItems)

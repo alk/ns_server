@@ -26,8 +26,11 @@
 -export([get_master_db/1, get_checkpoint_log_id/2]).
 -export([sanitize_status/3, get_rep_info/1]).
 -export([is_new_xdcr_path/0]).
+-export([upr_mutation_to_capi_doc/1]).
 
 -include("xdc_replicator.hrl").
+-include("mc_constants.hrl").
+-include("xdcr_upr_streamer.hrl").
 
 %% imported functions
 -import(couch_util, [get_value/2,
@@ -242,3 +245,25 @@ get_rep_info(#rep{source = Src, target = Tgt, replication_mode = Mode}) ->
 
 is_new_xdcr_path() ->
     ns_config:read_key_fast(xdcr_use_new_path, false).
+
+upr_mutation_to_capi_doc(Mutation) ->
+    #upr_mutation{id = Key,
+                  rev = Rev,
+                  body = Body0,
+                  datatype = DT,
+                  deleted = Deleted} = Mutation,
+    Body = case (DT band ?MC_DATATYPE_COMPRESSED) =/= 0 of
+               true ->
+                   case snappy:is_valid(Body0) of
+                       true ->
+                           snappy:decompress(Body0);
+                       _ ->
+                           ?xdcr_debug("Got invalid snappy data for compressed doc with id: `~s'. Will assume it's uncompressed", [Key]),
+                           Body0
+                   end;
+               _ ->
+                   Body0
+           end,
+    Doc0 = couch_doc:from_binary(Key, Body, true),
+    Doc0#doc{rev = Rev,
+             deleted = Deleted}.
