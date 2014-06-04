@@ -42,16 +42,27 @@
       escapeHTML(obj.bucket) + '</span></li>';
   };
 
-  render.collect_logs = function (obj) {
+  render.clusterLogsCollection = function (obj) {
     if (obj.status !== "running") {
       return "";
     }
 
-    var serversCount = (obj.perNode || []).length;
+    var serversCount = (_.keys(obj.perNode) || []).length;
+
+    var doneNodes = _.filter(obj.perNode || [], function (ni) {
+      return (ni.status === 'failed' || ni.status === 'collected'
+              || ni.status === 'failedUpload' || ni.status === 'uploaded');
+    });
+
+    var progress = 100;
+
+    if (serversCount !== 0) {
+      progress = doneNodes.length * 100 / serversCount;
+    }
 
     return '<li class="clearfix"><div class="usage_smallest">' +
     '<div class="used" style="width:' + (obj.progress >> 0) +
-    '%"></div></div><span class="message">Collecting ' + serversCount +
+    '%"></div></div><span class="message">Collecting logs from ' + serversCount +
     ' ' + (serversCount === 1 ? 'node' : 'nodes') + '</span></li>';
   };
 

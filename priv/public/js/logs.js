@@ -49,10 +49,58 @@ function createLogsSectionCells (ns, modeCell, stalenessCell, tasksProgressCell,
     }
 
     var tasks = v.need(tasksProgressCell);
-    return _.detect(tasks, function (taskInfo) {
-      return taskInfo.type === "collect_logs";
+    var task = _.detect(tasks, function (taskInfo) {
+      return taskInfo.type === "clusterLogsCollection";
     });
-  }).name("tasksRecoveryCell");
+    if (!task) {
+      return {
+        nodesByStatus: {},
+        isCompleted: true,
+        nodeErrors: [],
+        status: 'idle',
+        perNode: {}
+      }
+    }
+
+    // this is cheap deep cloning of task. We're going to add some
+    // attributes there and it's best to avoid mutating part of
+    // tasksProgressCell value
+    task = JSON.parse(JSON.stringify(task));
+
+    var perNodeHash = task.perNode;
+    var perNode = [];
+
+    var cancallable = "starting started startingUpload startedUpload".split(" ");
+
+    _.each(perNodeHash, function (ni, nodeName) {
+      ni.nodeName = nodeName.replace(/^.*?@/, '');
+      perNode.push(ni);
+      // possible per-node statuses are:
+      //      starting, started, failed, collected,
+      //      startingUpload, startedUpload, failedUpload, uploaded
+
+      if (task.status == 'cancelled' && cancallable.indexOf(ni.status) >= 0) {
+        ni.status = 'cancelled';
+      }
+    });
+
+    var nodesByStatus = _.groupBy(perNode, 'status');
+
+    var isCompleted = (task.status !== 'running');
+
+    var nodeErrors = _.compact(_.map(perNode, function (ni) {
+      if (ni.uploadOutput) {
+        return {nodeName: ni.nodeName,
+                error: ni.uploadOutput};
+      }
+    }));
+
+    task.nodesByStatus = nodesByStatus;
+    task.isCompleted = isCompleted;
+    task.nodeErrors = nodeErrors;
+
+    return task;
+  }).name("tasksCollectionInfoCell");
   ns.tasksCollectionInfoCell.equality = _.isEqual;
 
   ns.prepareCollectionInfoNodesCell = Cell.computeEager(function (v) {
@@ -127,10 +175,11 @@ var LogsSection = {
 
       showDialog(cancelConfiramationDialog, {
         eventBindings: [['.save_button', 'click', function (e) {
-
           e.preventDefault();
+          hideDialog(cancelConfiramationDialog);
+
           $.ajax({
-            url: '/collectLogs/cancel',
+            url: '/controller/cancelLogsCollection',
             type: "POST",
             success: function () {
               recalculateTasksUri();
@@ -138,8 +187,6 @@ var LogsSection = {
             },
             error: recalculateTasksUri
           });
-
-          hideDialog(cancelConfiramationDialog);
         }]]
       });
 
@@ -156,12 +203,10 @@ var LogsSection = {
       e.preventDefault();
 
       $.ajax({
-        contentType: "application/json; charset=utf-8",
-        dataType: "json",
         type: 'POST',
-        url: '/collectLogs/start',
-        data: JSON.stringify(getCollectFormValues()),
-        success: function (a, b, c) {
+        url: '/controller/startLogsCollection',
+        data: getCollectFormValues(),
+        success: function () {
           overlay = overlayWithSpinner(collectInfoStartNewView);
           showResultViewBtn.hide();
           self.tasksCollectionInfoCell.changedSlot.subscribeOnce(function () {
@@ -172,9 +217,24 @@ var LogsSection = {
         },
         error: function (resp) {
           hideErrors();
-          var errors = JSON.parse(resp.responseText);
-          _.each(errors.errors, function (value, key) {
-            showErrors(key, value);
+          var errors = {};
+          try {
+            errors = JSON.parse(resp.responseText);
+          } catch (e) {
+            // nothing
+            console.log("failed to parse json errors: ", e);
+          }
+          console.log("Got errors: ", errors);
+          _.each(errors, function (value, key) {
+            if (key != '_') {
+              showErrors(key, value);
+            } else {
+              genericDialog({
+                buttons: {ok: true},
+                header: "Failed to start cluster logs collection",
+                text: value
+              });
+            }
           });
         }
       });
@@ -187,32 +247,39 @@ var LogsSection = {
         return;
       }
 
-      var isAllnodesChecked = $(this).val() == 'allnodes';
+      var isAllnodesChecked = $(this).val() == '*';
       allActiveNodeBoxes.attr('checked', isAllnodesChecked);
       allActiveNodeBoxes.attr('disabled', isAllnodesChecked);
     });
 
-    function removeKeyIfStringIsEmpty(object, key) {
-      if (object[key] === "") {
-        delete object[key];
-      }
-    }
-
-    function partial(cb, first) {
-      return function (second) {
-        cb(first, second);
-      }
-    }
-
     function getCollectFormValues() {
-      var data = $.deparam(serializeForm(collectForm, undefined, true));
-      data.upload = data.upload === "true";
-      if (data.from === "nodes") {
-        data.nodes = data.nodes ? _.isArray(data.nodes) ? data.nodes : [data.nodes] : [];
+      var dataArray = collectForm.serializeArray();
+      var params = {'selected-nodes': []};
+      _.each(dataArray, function (pair) {
+        var name = pair.name;
+        var value = pair.value;
+        if (name === 'js-selected-nodes') {
+          params['selected-nodes'].push(value);
+        } else {
+          params[name] = value;
+        }
+      });
+      if (params['from'] === '*') {
+        delete params['from'];
+        delete params['selected-nodes'];
+        params['nodes'] = '*';
+      } else {
+        delete params['from'];
+        params['nodes'] = params['selected-nodes'].join(',');
+        delete params['selected-nodes'];
       }
-      _.each(["customer", "upload_host", "ticket"], partial(removeKeyIfStringIsEmpty, data));
+      _.each(["uploadHost", "customer", "ticket"], function (k) {
+        if (params[k] === '') {
+          delete params[k];
+        }
+      });
 
-      return data;
+      return params;
     }
 
     function showErrors(key, value) {
@@ -252,15 +319,7 @@ var LogsSection = {
     }
 
     function renderResultView(collectionInfo) {
-      var templateData = {
-        nodesByStatus: _.groupBy(collectionInfo.perNode, 'result'),
-        isCompleted: collectionInfo.status === "idle",
-        details: _.filter(collectionInfo.perNode, function (node) {
-          return node.details && node.details.length;
-        })
-      };
-
-      renderTemplate('js_collect_progress', templateData);
+      renderTemplate('js_collect_progress', collectionInfo);
     }
 
     function renderStartNewView() {
@@ -284,7 +343,7 @@ var LogsSection = {
         return;
       }
       var isCurrentlyRunning = collectionInfo.status === 'running';
-      var isRunBefore = !!collectionInfo.perNode.length;
+      var isRunBefore = !!_.keys(collectionInfo.perNode).length;
       var isResultView = tabName === 'result';
 
       !isCurrentlyRunning && cancelCollectBtn.removeClass('dynamic_disabled');
