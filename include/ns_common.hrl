@@ -92,8 +92,7 @@
                   ?USER_LOGGER, ?MENELAUS_LOGGER,
                   ?NS_DOCTOR_LOGGER, ?STATS_LOGGER,
                   ?REBALANCE_LOGGER, ?CLUSTER_LOGGER, ?VIEWS_LOGGER,
-                  ?MAPREDUCE_ERRORS_LOGGER, ?XDCR_LOGGER,
-                  ?XDCR_TRACE_LOGGER]).
+                  ?MAPREDUCE_ERRORS_LOGGER, ?XDCR_LOGGER]).
 
 -define(LOG(Level, Format, Args),
         ale:log(?NS_SERVER_LOGGER, Level, Format, Args)).

@@ -54,11 +54,16 @@ queue_fetch_loop(WorkerID, Target, Cp, ChangesManager,
         {'DOWN', _, _, _, _} ->
             ok = gen_server:call(Cp, {worker_done, self()}, infinity);
         {changes, ChangesManager, Changes, ReportSeq, SnapshotStart, SnapshotEnd} ->
+            NumChecked = length(Changes),
+            ?x_trace(gotChanges, [{reportSeq, ReportSeq},
+                                  {snapshotStart, SnapshotStart},
+                                  {snapshotEnd, SnapshotEnd},
+                                  {count, NumChecked}]),
             %% get docinfo of missing ids
             {MissingDocInfoList, MetaLatency, NumDocsOptRepd} =
                 find_missing(Changes, Target, OptRepThreshold, XMemLoc),
-            NumChecked = length(Changes),
             NumWritten = length(MissingDocInfoList),
+            ?x_trace(foundMissing, [{count, NumWritten}]),
             Start = now(),
             {ok, DataRepd} = local_process_batch(
                                MissingDocInfoList, Cp, Target,
@@ -83,6 +88,12 @@ queue_fetch_loop(WorkerID, Target, Cp, ChangesManager,
                                          worker_item_checked = NumChecked,
                                          worker_item_replicated = NumWritten}}, infinity),
 
+            ?x_trace(reportedSeqDone, [{reportSeq, ReportSeq},
+                                       {snapshotStart, SnapshotStart},
+                                       {snapshotEnd, SnapshotEnd},
+                                       {changesCount, NumChecked},
+                                       {missingCount, NumWritten}]),
+
             ?xdcr_trace("Worker reported completion of seq ~p, num docs written: ~p "
                         "data replicated: ~p bytes, latency: ~p ms.",
                         [ReportSeq, NumWritten, DataRepd, DocLatency]),
@@ -103,11 +114,13 @@ local_process_batch([], Cp, #httpdb{} = Target,
 local_process_batch([Mutation | Rest], Cp,
                     #httpdb{} = Target, Batch, BatchSize, BatchItems, XMemLoc, Acc) ->
     #upr_mutation{id = Key,
-                  local_seq = KeySeq,
-                  rev = {RevA, _RevB} = Rev,
+                  %% local_seq = KeySeq,
+                  %% rev = {RevA, _RevB} = Rev,
+                  rev = Rev,
                   body = Body,
                   deleted = Deleted} = Mutation,
-    ?xdcr_trace("added mutation ~s@~B (rev = ~B-..) to outgoing batch", [Key, KeySeq, RevA]),
+    %% ?xdcr_trace("added mutation ~s@~B (rev = ~B-..) to outgoing batch", [Key, KeySeq, RevA]),
+    %% xdcr_trace:log(batchMutation, [{id, Key}, {seq, KeySeq}, {revnum, RevA}]),
     {Batch2, DataFlushed} =
         case XMemLoc of
             nil ->
@@ -123,12 +136,24 @@ local_process_batch([Mutation | Rest], Cp,
 
 -spec flush_docs_helper(any(), list(), term()) -> ok.
 flush_docs_helper(Target, DocsList, nil) ->
+    BeforeTS = case ?x_trace_enabled() of
+                   true ->
+                       os:timestamp();
+                   _ ->
+                       undefined
+               end,
     {RepMode,RV} = {"capi", flush_docs_capi(Target, DocsList)},
 
     case RV of
         ok ->
             ?xdcr_trace("replication mode: ~p, worker process replicated ~p docs to target ~p",
                         [RepMode, length(DocsList), misc:sanitize_url(Target#httpdb.url)]),
+            case BeforeTS of
+                undefined ->
+                    ok;
+                _ ->
+                    ?x_trace(flushed, [{beforeTS, xdcr_trace:format_ts(BeforeTS)}])
+            end,
             ok;
         {failed_write, Error} ->
             ?xdcr_error("replication mode: ~p, unable to replicate ~p docs to target ~p",
@@ -137,12 +162,24 @@ flush_docs_helper(Target, DocsList, nil) ->
     end;
 
 flush_docs_helper(Target, DocsList, XMemLoc) ->
+    BeforeTS = case ?x_trace_enabled() of
+                   true ->
+                       os:timestamp();
+                   _ ->
+                       undefined
+               end,
     {RepMode,RV} = {"xmem", flush_docs_xmem(XMemLoc, DocsList)},
 
     case RV of
         ok ->
             ?xdcr_trace("replication mode: ~p, worker process replicated ~p docs to target ~p",
                         [RepMode, length(DocsList), misc:sanitize_url(Target#httpdb.url)]),
+            case BeforeTS of
+                undefined ->
+                    ok;
+                _ ->
+                    ?x_trace(flushed, [{startTS, xdcr_trace:format_ts(BeforeTS)}])
+            end,
             ok;
         {failed_write, Error} ->
             ?xdcr_error("replication mode: ~p, unable to replicate ~p docs to target ~p",
@@ -189,17 +226,28 @@ find_missing(DocInfos, Target, OptRepThreshold, XMemLoc) ->
         case length(BigDocIdRevs) of
             V when V > 0 ->
                 MissingBigIdRevs = find_missing_helper(Target, BigDocIdRevs, XMemLoc),
-                {lists:flatten([SmallDocIdRevs | MissingBigIdRevs]), length(MissingBigIdRevs)};
+                LenMissing = length(MissingBigIdRevs),
+                ?x_trace(didFindMissing, [{count, V}, {missingCount, LenMissing}]),
+                {lists:flatten([SmallDocIdRevs | MissingBigIdRevs]), LenMissing};
             _ ->
                 {SmallDocIdRevs, 0}
         end,
 
+    %% latency in millisecond
+    Latency = round(timer:now_diff(now(), Start) div 1000),
+
     %% build list of docinfo for all missing keys
     MissingDocInfoList = lists:filter(
-                           fun(#upr_mutation{id = Id}) ->
+                           fun(#upr_mutation{id = Id,
+                                             local_seq = KeySeq,
+                                             rev = {RevA, _}}) ->
                                    case lists:keyfind(Id, 1, Missing) of
                                        %% not a missing key
                                        false ->
+                                           ?x_trace(notMissing,
+                                                    [{key, Id},
+                                                     {seq, KeySeq},
+                                                     {revnum, RevA}]),
                                            false;
                                        %% a missing key
                                        _  -> true
@@ -207,8 +255,13 @@ find_missing(DocInfos, Target, OptRepThreshold, XMemLoc) ->
                            end,
                            DocInfos),
 
-    %% latency in millisecond
-    Latency = round(timer:now_diff(now(), Start) div 1000),
+    ?X_TRACE_IF(?x_trace(missing,
+                         [{startTS, xdcr_trace:format_ts(Start)},
+                          {k, {json,
+                               [[Id, KeySeq, RevA]
+                                || #upr_mutation{id = Id,
+                                                 local_seq = KeySeq,
+                                                 rev = {RevA, _}} <- MissingDocInfoList]}}])),
 
     RepMode = case XMemLoc of
                   nil ->
@@ -256,6 +309,7 @@ maybe_flush_docs_capi(#httpdb{} = Target, Batch, Doc, BatchSize, BatchItems) ->
                         "(batch size ~b, batch items ~b)",
                         [ItemsAcc2, SizeAcc2, BatchSize, BatchItems]),
             flush_docs_capi(Target, [JsonDoc | DocAcc]),
+            ?x_trace(flushed, []),
             %% data flushed, return empty batch and size of data flushed
             {#batch{}, SizeAcc2};
         false ->            %% no data flushed in this turn, return the new batch
@@ -332,6 +386,7 @@ maybe_flush_docs_xmem(XMemLoc, Batch, Mutation, BatchSize, BatchItems) ->
                         [ItemsAcc2, SizeAcc2, BatchSize, BatchItems]),
             DocsList = [Mutation | DocAcc],
             ok = flush_docs_xmem(XMemLoc, DocsList),
+            ?x_trace(flushed, []),
             %% data flushed, return empty batch and size of # of docs flushed
             {#batch{}, SizeAcc2};
         _ ->            %% no data flushed in this turn, return the new batch
