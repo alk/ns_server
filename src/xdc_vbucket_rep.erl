@@ -120,8 +120,7 @@ handle_info(init, #init_state{init_throttle = InitThrottle} = InitState) ->
         {noreply, update_status_to_parent(State)}
     catch
         ErrorType:Error ->
-            ?xdcr_error("Error initializing vb replicator (~p):~p~n~p",
-                        [InitState, {ErrorType,Error}, erlang:get_stacktrace()]),
+            ?xdcr_error("Error initializing vb replicator (~p):~p", [InitState, {ErrorType,Error}]),
             {stop, Error, InitState}
     after
         concurrency_throttle:is_done(InitThrottle)
