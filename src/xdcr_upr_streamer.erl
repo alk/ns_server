@@ -232,6 +232,7 @@ do_start(Socket, Vb, FailoverId,
 
 stream_vbucket(Bucket, Vb, FailoverId,
                StartSeqno, SnapshotStart, SnapshotEnd, Callback, Acc) ->
+    erlang:error(crippled_on_purpose),
     true = is_list(Bucket),
     Parent = self(),
     {ok, Child} =
