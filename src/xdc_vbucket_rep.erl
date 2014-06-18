@@ -47,9 +47,6 @@
 -include("remote_clusters_info.hrl").
 -include("xdcr_upr_streamer.hrl").
 
-%% for ?MC_DATATYPE_COMPRESSED
--include("mc_constants.hrl").
-
 %% imported functions
 -import(couch_util, [get_value/2,
                      to_binary/1]).
@@ -727,14 +724,11 @@ init_replication_state(#init_state{rep = Rep,
 
                          {ok, {_ClusterUUID, BucketName}} = remote_clusters_info:parse_remote_bucket_reference(Tgt),
                          Password = binary_to_list(LatestRemoteBucket#remote_bucket.password),
-                         RemoteBucketCaps = LatestRemoteBucket#remote_bucket.bucket_caps,
-                         SupportsDatatype = lists:member(<<"datatype">>, RemoteBucketCaps),
                          #xdc_rep_xmem_remote{ip = RemoteHostName, port = Port,
                                               bucket = BucketName, vb = Vb,
                                               username = BucketName, password = Password,
                                               options = [{remote_node, RN},
                                                          {remote_proxy_port, RN#remote_node.ssl_proxy_port},
-                                                         {supports_datatype, SupportsDatatype},
                                                          {cert, LatestRemoteBucket#remote_bucket.cluster_cert}]};
                      _ ->
                          nil
@@ -920,16 +914,8 @@ start_replication(#rep_state{
         false ->
             ChangesReader = spawn_changes_reader_old(StartSeq, Source, ChangesQueue);
         _ ->
-            SupportsDatatype =
-                case Remote of
-                    #xdc_rep_xmem_remote{options = XMemRemoteOptions1} ->
-                        proplists:get_value(supports_datatype, XMemRemoteOptions1);
-                    _ ->
-                        false
-                end,
             ChangesReader = spawn_changes_reader(SourceBucket, Vb, ChangesQueue,
-                                                 StartSeq, SnapshotStart, SnapshotEnd, FailoverUUID,
-                                                 SupportsDatatype)
+                                                 StartSeq, SnapshotStart, SnapshotEnd, FailoverUUID)
     end,
     erlang:put(changes_reader, ChangesReader),
     %% Changes manager - responsible for dequeing batches from the changes queue
@@ -1100,18 +1086,15 @@ update_number_of_changes(#rep_state{source_name = Src,
 
 
 spawn_changes_reader(BucketName, Vb, ChangesQueue, StartSeq,
-                     SnapshotStart, SnapshotEnd, FailoverUUID,
-                     HonorDatatype) ->
+                     SnapshotStart, SnapshotEnd, FailoverUUID) ->
     Parent = self(),
     spawn_link(fun() ->
                        read_changes(BucketName, Vb, ChangesQueue, StartSeq,
-                                    SnapshotStart, SnapshotEnd, FailoverUUID, Parent,
-                                    HonorDatatype)
+                                    SnapshotStart, SnapshotEnd, FailoverUUID, Parent)
                end).
 
 read_changes(BucketName, Vb, ChangesQueue, StartSeq,
-             SnapshotStart, SnapshotEnd, FailoverUUID, Parent,
-             HonorDatatype) ->
+             SnapshotStart, SnapshotEnd, FailoverUUID, Parent) ->
     {start_seq, true} = {start_seq, is_integer(StartSeq)},
     {snapshot_start, true} = {snapshot_start, is_integer(SnapshotStart)},
     {snapshot_end, true} = {snapshot_end, is_integer(SnapshotEnd)},
@@ -1130,34 +1113,13 @@ read_changes(BucketName, Vb, ChangesQueue, StartSeq,
                   {stream_end, _, _, _} = Msg ->
                       Parent ! Msg,
                       {stop, []};
-                  #upr_mutation{} = Mutation0 ->
-                      Mutation = maybe_clear_datatype(HonorDatatype, Mutation0),
+                  #upr_mutation{} = Mutation ->
                       couch_work_queue:queue(ChangesQueue, Mutation),
                       {ok, []}
               end
       end, []),
 
     couch_work_queue:close(ChangesQueue).
-
-maybe_clear_datatype(true, Mutation) ->
-    Mutation;
-maybe_clear_datatype(false, #upr_mutation{datatype = DT,
-                                          body = Body0} = Mutation) ->
-    case (DT band ?MC_DATATYPE_COMPRESSED) =/= 0 of
-        true ->
-            case snappy:decompress(Body0) of
-                {ok, Body} ->
-                    Mutation#upr_mutation{body = Body,
-                                          datatype = 0};
-                {error, Err} ->
-                    ?xdcr_debug("Got invalid snappy data for compressed doc with id: `~s'."
-                                " Will assume it's uncompressed. Snappy error: ~p",
-                                [Mutation#upr_mutation.id, Err]),
-                    Mutation
-            end;
-        _ ->
-            Mutation
-    end.
 
 spawn_changes_reader_old(StartSeq, Db, ChangesQueue) ->
     spawn_link(fun() ->
