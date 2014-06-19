@@ -260,12 +260,7 @@ extract_ck_params(Req) ->
     {Bucket, VB, VBOpaque, CommitOpaque}.
 
 handle_pre_replicate(Req) ->
-    case xdc_rep_utils:is_new_xdcr_path() of
-        true ->
-            handle_pre_replicate_new(Req);
-        _ ->
-            handle_pre_replicate_old(Req)
-    end.
+    handle_pre_replicate_old(Req).
 
 handle_pre_replicate_old(#httpd{method='POST'}=Req) ->
     {Bucket, VB, VBOpaque, CommitOpaque} = extract_ck_params(Req),
@@ -285,58 +280,9 @@ handle_pre_replicate_old(#httpd{method='POST'}=Req) ->
 
     couch_httpd:send_json(Req, Code, {[{<<"vbopaque">>, LocalVBOpaque}]}).
 
-handle_pre_replicate_new(#httpd{method='POST'}=Req) ->
-    {Bucket, VB, VBOpaque, CommitOpaque} = extract_ck_params(Req),
-
-    FailoverLog = case xdcr_upr_streamer:get_failover_log(binary_to_list(Bucket), VB) of
-                      {memcached_error, not_my_vbucket} ->
-                          erlang:throw({not_found, not_my_vbucket});
-                      XFailoverLog when is_list(XFailoverLog) ->
-                          XFailoverLog
-                  end,
-
-    {VBUUID, _} = lists:last(FailoverLog),
-
-    {CommitUUID, CommitSeq} = case CommitOpaque of
-                                  [XU, XS] -> {XU, XS};
-                                  _ -> {undefined, -1}
-                              end,
-
-    CommitOk = case CommitOpaque =:= undefined of
-                   true -> true;
-                   _ ->
-                       validate_commit(FailoverLog, CommitUUID, CommitSeq)
-               end,
-
-    VBMatches = VBOpaque =:= undefined orelse VBOpaque =:= VBUUID,
-
-    ?log_debug("CommitOk: ~p, VBMatches: ~p, CommitOpaque: ~p, stuff: ~p",
-               [CommitOk, VBMatches,
-                CommitOpaque, {FailoverLog, CommitUUID, CommitSeq}]),
-
-    Code = case VBMatches andalso CommitOk of
-               true -> 200;
-               false -> 400
-           end,
-
-    couch_httpd:send_json(Req, Code, {[{<<"vbopaque">>, VBUUID}]}).
-
-get_vbucket_seqno_stats(BucketName, Vb) ->
-    {ok, KV} = ns_memcached:stats(couch_util:to_list(BucketName), io_lib:format("vbucket-seqno ~B", [Vb])),
-    Key = iolist_to_binary(io_lib:format("vb_~B:uuid", [Vb])),
-    SeqnoKey = iolist_to_binary(io_lib:format("vb_~B:high_seqno", [Vb])),
-    U0 = misc:expect_prop_value(Key, KV),
-    S0 = misc:expect_prop_value(SeqnoKey, KV),
-    {list_to_integer(binary_to_list(U0)),
-     list_to_integer(binary_to_list(S0))}.
 
 handle_commit_for_checkpoint(#httpd{method='POST'}=Req) ->
-    case xdc_rep_utils:is_new_xdcr_path() of
-        true ->
-            handle_commit_for_checkpoint_new(Req);
-        _ ->
-            handle_commit_for_checkpoint_old(Req)
-    end.
+    handle_commit_for_checkpoint_old(Req).
 
 handle_commit_for_checkpoint_old(#httpd{method='POST'}=Req) ->
     {Bucket, VB, VBOpaque, _} = extract_ck_params(Req),
@@ -361,38 +307,6 @@ handle_commit_for_checkpoint_old(#httpd{method='POST'}=Req) ->
         _ ->
             system_stats_collector:increment_counter(xdcr_checkpoint_commit_mismatches, 1),
             couch_httpd:send_json(Req, 400, {[{<<"vbopaque">>, LocalVBOpaque}]})
-    end.
-
-handle_commit_for_checkpoint_new(#httpd{method='POST'}=Req) ->
-    {Bucket, VB, VBOpaque, _} = extract_ck_params(Req),
-
-    TimeBefore = erlang:now(),
-    system_stats_collector:increment_counter(xdcr_checkpoint_commits_enters, 1),
-    try
-        case ns_memcached:perform_checkpoint_commit_for_xdcr(Bucket, VB, ?XDCR_CHECKPOINT_TIMEOUT) of
-            ok -> ok;
-            {memcached_error, not_my_vbucket} ->
-                erlang:throw({not_found, not_my_vbucket})
-        end
-    after
-        system_stats_collector:increment_counter(xdcr_checkpoint_commits_leaves, 1)
-    end,
-
-    TimeAfter = erlang:now(),
-    system_stats_collector:add_histo(xdcr_checkpoint_commit_time, timer:now_diff(TimeAfter, TimeBefore)),
-
-    {UUID, Seqno} = get_vbucket_seqno_stats(Bucket, VB),
-
-    ?log_debug("UUID: ~p, VBOpaque: ~p", [{UUID, Seqno}, VBOpaque]),
-
-    case UUID =:= VBOpaque of
-        true ->
-            system_stats_collector:increment_counter(xdcr_checkpoint_commit_oks, 1),
-            CommitOpaque = [UUID, Seqno],
-            couch_httpd:send_json(Req, 200, {[{<<"commitopaque">>, CommitOpaque}]});
-        _ ->
-            system_stats_collector:increment_counter(xdcr_checkpoint_commit_mismatches, 1),
-            couch_httpd:send_json(Req, 400, {[{<<"vbopaque">>, UUID}]})
     end.
 
 validate_commit(FailoverLog, CommitUUID, CommitSeq) ->

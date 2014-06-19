@@ -115,7 +115,7 @@ categorise_statuses_to_dict(Statuses, MutationsList) ->
         = lists:foldl(fun(Status, {DictAcc, ErrorKeyAcc, CountAcc}) ->
                               CountAcc2 = CountAcc + 1,
                               M = lists:nth(CountAcc2, MutationsList),
-                              Key = M#upr_mutation.id,
+                              Key = M#doc.id,
                               {DictAcc2, ErrorKeyAcc2}  =
                                   case Status of
                                       success ->

@@ -108,16 +108,13 @@ handle_info({'EXIT',_Pid, Reason}, St) ->
 handle_info(init, #init_state{init_throttle = InitThrottle} = InitState) ->
     try
         State = init_replication_state(InitState),
-        case xdc_rep_utils:is_new_xdcr_path() of
-            true ->
-                check_src_db_updated(State);
-            _ ->
-                self() ! src_db_updated % signal to self to check for changes
-        end,
+        self() ! src_db_updated, % signal to self to check for changes
         {noreply, update_status_to_parent(State)}
     catch
         ErrorType:Error ->
-            ?xdcr_error("Error initializing vb replicator (~p):~p", [InitState, {ErrorType,Error}]),
+            ST = erlang:get_stacktrace(),
+            ?xdcr_error("Error initializing vb replicator (~p):~p", [InitState, {ErrorType,Error,ST}]),
+            erlang:raise(ErrorType, Error, ST),
             {stop, Error, InitState}
     after
         concurrency_throttle:is_done(InitThrottle)
@@ -239,15 +236,6 @@ handle_call({report_seq_done,
                                                workers_stat = AllWorkersStat,
                                                vb = Vb} = VbStatus} = State) ->
     gen_server:reply(From, ok),
-    case xdc_rep_utils:is_new_xdcr_path() of
-        true ->
-            %% note: that left-hand variables are bound
-            [{Seq, SnapshotStart, SnapshotEnd}] = ets:lookup(erlang:get(work_seq_to_snapshot_seq), Seq),
-            _ = ets:delete(erlang:get(work_seq_to_snapshot_seq), Seq),
-
-            true = (CurrentSnapshotSeq =< SnapshotStart);
-        _ -> ok
-    end,
 
     {NewThroughSeq0, NewSeqsInProgress} = case SeqsInProgress of
                                               [Seq | Rest] ->
@@ -368,43 +356,28 @@ handle_call({worker_done, Pid}, _From,
 
             %% allow another replicator to go
             State2 = replication_turn_is_done(State),
-            case xdc_rep_utils:is_new_xdcr_path() of
-                false ->
-                    couch_api_wrap:db_close(State2#rep_state.source);
-                _ -> ok
-            end,
+            couch_api_wrap:db_close(State2#rep_state.source),
             couch_api_wrap:db_close(State2#rep_state.src_master_db),
             couch_api_wrap:db_close(State2#rep_state.target),
 
-            case xdc_rep_utils:is_new_xdcr_path() of
-                false ->
-                    %% force check for changes since we last snapshop
-                    %%
-                    %% NOTE: this is required for correct handling of
-                    %% pause/resume as of now. I.e. because we can actually
-                    %% reach this state without completing replication of
-                    %% snapshot we had
-                    %%
-                    %% This is also required because of message drop in
-                    %% handling of src_db_updated message in replicating
-                    %% state. I.e. we discard src_db_updated messages while
-                    %% replicating snapshot, so we have to assume that some
-                    %% more mutations were made after we're done with
-                    %% snapshot.
-                    self() ! src_db_updated;
-                _ -> ok
-            end,
+            %% force check for changes since we last snapshop
+            %%
+            %% NOTE: this is required for correct handling of
+            %% pause/resume as of now. I.e. because we can actually
+            %% reach this state without completing replication of
+            %% snapshot we had
+            %%
+            %% This is also required because of message drop in
+            %% handling of src_db_updated message in replicating
+            %% state. I.e. we discard src_db_updated messages while
+            %% replicating snapshot, so we have to assume that some
+            %% more mutations were made after we're done with
+            %% snapshot.
+            self() ! src_db_updated,
 
             %% changes may or may not be closed
-            case xdc_rep_utils:is_new_xdcr_path() of
-                false ->
-                    VbStatus2 = VbStatus#rep_vb_status{size_changes_queue = 0,
-                                                       docs_changes_queue = 0};
-                true ->
-                    VbStatus2 = VbStatus#rep_vb_status{size_changes_queue = 0,
-                                                       docs_changes_queue = 0,
-                                                       num_changes_left = 0}
-            end,
+            VbStatus2 = VbStatus#rep_vb_status{size_changes_queue = 0,
+                                               docs_changes_queue = 0},
 
             %% dump a bunch of stats
             Vb = VbStatus2#rep_vb_status.vb,
@@ -462,13 +435,6 @@ handle_call({worker_done, Pid}, _From,
             %% cancel the timer since we will start it next time the vb rep waken up
             NewState2 = xdc_vbucket_rep_ckpt:cancel_timer(NewState),
 
-            case xdc_rep_utils:is_new_xdcr_path() of
-                true ->
-                    check_src_db_updated(NewState2);
-                _ ->
-                    ok
-            end,
-
             % hibernate to reduce memory footprint while idle
             {reply, ok, NewState2, hibernate};
         Workers2 ->
@@ -518,15 +484,8 @@ handle_cast({report_error, Err},
     gen_server:cast(Parent, {report_error, Err}),
     {noreply, State};
 
-handle_cast({report_seq, Seq, SnapshotStart, SnapshotEnd},
+handle_cast({report_seq, Seq, _SnapshotStart, _SnapshotEnd},
             #rep_state{seqs_in_progress = SeqsInProgress} = State) ->
-    case xdc_rep_utils:is_new_xdcr_path() of
-        true ->
-            ets:insert(erlang:get(work_seq_to_snapshot_seq),
-                       {Seq, SnapshotStart, SnapshotEnd});
-        _ ->
-            ok
-    end,
     NewSeqsInProgress = ordsets:add_element(Seq, SeqsInProgress),
     {noreply, State#rep_state{seqs_in_progress = NewSeqsInProgress}}.
 
@@ -582,15 +541,9 @@ terminate(Reason, #rep_state{
 
 terminate_cleanup(State0) ->
     State = xdc_vbucket_rep_ckpt:cancel_timer(State0),
-    case xdc_rep_utils:is_new_xdcr_path() of
-        true ->
-            Dbs = [State#rep_state.target,
-                   State#rep_state.src_master_db];
-        false ->
-            Dbs = [State#rep_state.target,
-                   State#rep_state.source,
-                   State#rep_state.src_master_db]
-    end,
+    Dbs = [State#rep_state.target,
+           State#rep_state.source,
+           State#rep_state.src_master_db],
     [catch couch_api_wrap:db_close(Db) || Db <- Dbs, Db /= undefined].
 
 
@@ -698,12 +651,7 @@ init_replication_state(#init_state{rep = Rep,
     TgtURI = hd(dict:fetch(Vb, CurrRemoteBucket#remote_bucket.capi_vbucket_map)),
     CertPEM = CurrRemoteBucket#remote_bucket.cluster_cert,
     TgtDb = xdc_rep_utils:parse_rep_db(TgtURI, [], [{xdcr_cert, CertPEM} | Options]),
-    case xdc_rep_utils:is_new_xdcr_path() of
-        false ->
-            {ok, Source} = couch_api_wrap:db_open(SrcVbDb, []);
-        _ ->
-            Source = undefined
-    end,
+    {ok, Source} = couch_api_wrap:db_open(SrcVbDb, []),
     {ok, Target} = couch_api_wrap:db_open(TgtDb, []),
 
     SrcMasterDb = capi_utils:must_open_vbucket(Src, <<"master">>),
@@ -750,12 +698,7 @@ init_replication_state(#init_state{rep = Rep,
                  TotalDocsChecked, TotalDocsWritten,
                  TotalDataReplicated, RemoteVBOpaque}]),
 
-    case xdc_rep_utils:is_new_xdcr_path() of
-        true ->
-            LocalVBUUID = undefined;
-        false ->
-            LocalVBUUID = xdc_vbucket_rep_ckpt:get_local_vbuuid(Rep#rep.source, Vb)
-    end,
+    LocalVBUUID = xdc_vbucket_rep_ckpt:get_local_vbuuid(Rep#rep.source, Vb),
     %% check if we are already behind purger
     %% PurgeSeq = couch_db:get_purge_seq(Source),
     %% BehindPurger  =
@@ -771,12 +714,7 @@ init_replication_state(#init_state{rep = Rep,
     %%             false
     %%     end,
 
-    case xdc_rep_utils:is_new_xdcr_path() of
-        false ->
-            couch_db:close(Source);
-        _ ->
-            ok
-    end,
+    couch_db:close(Source),
     couch_db:close(SrcMasterDb),
     couch_api_wrap:db_close(Target),
 
@@ -871,12 +809,7 @@ start_replication(#rep_state{
 
     NumWorkers = get_value(worker_processes, Options),
     BatchSizeItems = get_value(worker_batch_size, Options),
-    case xdc_rep_utils:is_new_xdcr_path() of
-        false ->
-            {ok, Source} = couch_api_wrap:db_open(SourceName, []);
-        _ ->
-            Source = undefined
-    end,
+    {ok, Source} = couch_api_wrap:db_open(SourceName, []),
 
     %% we re-fetch bucket details to get fresh remote cluster certificate
     {TgtDB, TgtURI} =
@@ -963,12 +896,7 @@ start_replication(#rep_state{
     Workers = lists:map(
                 fun(WorkerID) ->
                         WorkerOption2 = WorkerOption#rep_worker_option{worker_id = WorkerID},
-                        case xdc_rep_utils:is_new_xdcr_path() of
-                            false ->
-                                {ok, WorkerPid} = xdc_vbucket_rep_worker_old:start_link(WorkerOption2);
-                            _ ->
-                                {ok, WorkerPid} = xdc_vbucket_rep_worker:start_link(WorkerOption2)
-                        end,
+                        {ok, WorkerPid} = xdc_vbucket_rep_worker_old:start_link(WorkerOption2),
                         WorkerPid
                 end,
                 lists:seq(1, NumWorkers)),
@@ -1153,19 +1081,10 @@ changes_manager_loop_open(Parent, ChangesQueue, BatchSize) ->
                 closed ->
                     ok; % now done!
                 {ok, Changes, _Size} ->
-                    case xdc_rep_utils:is_new_xdcr_path() of
-                        false ->
-                            #doc_info{local_seq = Seq} = lists:last(Changes),
-                            ReportSeq = Seq,
-                            ok = gen_server:cast(Parent, {report_seq, ReportSeq, 0, 0}),
-                            From ! {changes, self(), Changes, ReportSeq};
-                        true ->
-                            #upr_mutation{local_seq = ReportSeq,
-                                          snapshot_start_seq = SnapshotStart,
-                                          snapshot_end_seq = SnapshotEnd} = lists:last(Changes),
-                            ok = gen_server:cast(Parent, {report_seq, ReportSeq, SnapshotStart, SnapshotEnd}),
-                            From ! {changes, self(), Changes, ReportSeq, SnapshotStart, SnapshotEnd}
-                    end,
+                    #doc_info{local_seq = Seq} = lists:last(Changes),
+                    ReportSeq = Seq,
+                    ok = gen_server:cast(Parent, {report_seq, ReportSeq, 0, 0}),
+                    From ! {changes, self(), Changes, ReportSeq},
                     changes_manager_loop_open(Parent, ChangesQueue, BatchSize)
             end
     end.

@@ -98,6 +98,23 @@ bulk_set_metas_inner(S, Vb, MutationsList) ->
     end.
 
 encode_single_set_meta(Vb,
+                       #doc{id = Key, rev = Rev, deleted = Deleted,
+                            body = DocValue}) ->
+    {OpCode, Data} = case Deleted of
+                         true ->
+                             {?CMD_DEL_WITH_META, <<>>};
+                         _ ->
+                             {?CMD_SET_WITH_META, DocValue}
+                     end,
+    Ext = mc_client_binary:rev_to_mcd_ext(Rev),
+    McHeader = #mc_header{vbucket = Vb, opcode = OpCode},
+    %% CAS does not matter since remote ep_engine has capability
+    %% to do getMeta internally before doing setWithMeta or delWithMeta
+    CAS  = 0,
+    McBody = #mc_entry{key = Key, data = Data, ext = Ext, cas = CAS},
+    mc_binary:encode(req, McHeader, McBody);
+
+encode_single_set_meta(Vb,
                        #upr_mutation{id = Key, rev = Rev, deleted = Deleted,
                                      body = DocValue}) ->
     {OpCode, Data} = case Deleted of
