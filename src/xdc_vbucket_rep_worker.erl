@@ -32,7 +32,8 @@ start_link(#rep_worker_option{cp = Cp, target = Target,
                              erlang:monitor(process, ChangesManager),
                              queue_fetch_loop(WorkerID, Target, Cp,
                                               ChangesManager, OptRepThreshold,
-                                              BatchSize, BatchItems, XMemLoc)
+                                              BatchSize, BatchItems, XMemLoc),
+                             xdc_rep_utils:transfer_reductions(xdcr_workers_reductions)
                      end),
 
 

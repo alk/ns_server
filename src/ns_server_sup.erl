@@ -179,6 +179,24 @@ child_specs() ->
      {xdc_lhttpc_pool, {lhttpc_manager, start_link, [[{name, xdc_lhttpc_pool}, {connection_timeout, 120000}, {pool_size, 200}]]},
       {permanent, 1}, 10000, worker, [lhttpc_manager]},
 
+     {xdcr_workers_reductions, {xdc_rep_utils, start_link_reductions, [xdcr_workers_reductions]},
+      permanent, 1000, worker, []},
+
+     {xdcr_socket_reductions, {xdc_rep_utils, start_link_reductions, [xdcr_socket_reductions]},
+      permanent, 1000, worker, []},
+
+     {xdcr_consumer_reductions, {xdc_rep_utils, start_link_reductions, [xdcr_consumer_reductions]},
+      permanent, 1000, worker, []},
+
+     {xdcr_changes_manager_reductions, {xdc_rep_utils, start_link_reductions, [xdcr_changes_manager_reductions]},
+      permanent, 1000, worker, []},
+
+     {xdcr_changes_queue_reductions, {xdc_rep_utils, start_link_reductions, [xdcr_changes_queue_reductions]},
+      permanent, 1000, worker, []},
+
+     {xdcr_vbrep_reductions, {xdc_rep_utils, start_link_reductions, [xdcr_vbrep_reductions]},
+      permanent, 1000, worker, []},
+
      {ns_null_connection_pool, {ns_null_connection_pool, start_link, [ns_null_connection_pool]},
       permanent, 1000, worker, []},
 

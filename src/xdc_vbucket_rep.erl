@@ -534,6 +534,7 @@ report_error(_Err, Vb, Parent) ->
 replication_turn_is_done(#rep_state{throttle = T} = State) ->
     ?x_trace(turnIsDone, []),
     concurrency_throttle:is_done(T),
+    xdc_rep_utils:transfer_reductions(xdcr_vbrep_reductions),
     State.
 
 update_status_to_parent(#rep_state{parent = Parent,
@@ -820,10 +821,11 @@ start_replication(#rep_state{
 
     SrcMasterDb = capi_utils:must_open_vbucket(SourceBucket, <<"master">>),
 
-    {ok, ChangesQueue} = couch_work_queue:new([
-                                               {max_items, BatchSizeItems * NumWorkers * 2},
-                                               {max_size, 100 * 1024 * NumWorkers}
-                                              ]),
+    {ok, ChangesQueue} = xdcr_work_queue:new([
+                                              {max_items, BatchSizeItems * NumWorkers * 2},
+                                              {max_size, 100 * 1024 * NumWorkers}
+                                             ]),
+    ?log_debug("Created queue: ~p", [ChangesQueue]),
     %% This starts the _changes reader process. It adds the changes from
     %% the source db to the ChangesQueue.
     SupportsDatatype =
@@ -1042,7 +1044,8 @@ maybe_clear_datatype(false, #upr_mutation{datatype = DT,
 
 spawn_changes_manager(Parent, ChangesQueue, BatchSize) ->
     spawn_link(fun() ->
-                       changes_manager_loop_open(Parent, ChangesQueue, BatchSize)
+                       changes_manager_loop_open(Parent, ChangesQueue, BatchSize),
+                       xdc_rep_utils:transfer_reductions(xdcr_changes_manager_reductions)
                end).
 
 changes_manager_loop_open(Parent, ChangesQueue, BatchSize) ->

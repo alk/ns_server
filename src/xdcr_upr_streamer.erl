@@ -289,7 +289,8 @@ stream_vbucket_inner(Bucket, Vb, FailoverId,
             ok = xdcr_upr_sockets_pool:put_socket(Bucket, S);
         stop ->
             ?log_debug("Got stop. Dropping socket on the floor")
-    end.
+    end,
+    xdc_rep_utils:transfer_reductions(xdcr_socket_reductions).
 
 
 scan_for_nops(Data, Pos) ->
@@ -454,18 +455,20 @@ consumer_loop_have_msg(Child, Callback, Acc, ConsumedSoFar,
 consumer_loop_exit(Child, DoneOrStop, Data) ->
     Child ! DoneOrStop,
     misc:wait_for_process(Child, infinity),
-    case DoneOrStop of
-        done ->
-            <<>> = Data,
-            receive
-                MoreData when is_binary(MoreData) ->
-                    erlang:error({unexpected_data_after_done, MoreData})
-            after 0 ->
-                    ok
-            end;
-        stop ->
-            consume_aborted_stuff()
-    end.
+    RV = case DoneOrStop of
+             done ->
+                 <<>> = Data,
+                 receive
+                     MoreData when is_binary(MoreData) ->
+                         erlang:error({unexpected_data_after_done, MoreData})
+                 after 0 ->
+                         ok
+                 end;
+             stop ->
+                 consume_aborted_stuff()
+         end,
+    xdc_rep_utils:transfer_reductions(xdcr_consumer_reductions),
+    RV.
 
 consume_aborted_stuff() ->
     receive

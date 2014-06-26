@@ -23,6 +23,8 @@
 -export([parse_rep_db/3]).
 -export([sanitize_status/3, get_rep_info/1]).
 
+-export([start_link_reductions/1, transfer_reductions/1]).
+
 -include("xdc_replicator.hrl").
 
 %% imported functions
@@ -173,3 +175,25 @@ sanitize_status(_Opt, _PDict, State) ->
 
 get_rep_info(#rep{source = Src, target = Tgt, replication_mode = Mode}) ->
     ?format_msg("from ~p to ~p in mode: ~p", [Src, Tgt, Mode]).
+
+start_link_reductions(Name) ->
+    {ok, Pid} = work_queue:start_link(Name),
+    work_queue:submit_work(
+      Pid,
+      fun () ->
+              erlang:process_flag(priority, high)
+      end),
+    {ok, Pid}.
+
+transfer_reductions(Name) ->
+    OldReds = case erlang:get(transfer_reductions_prev) of
+                  undefined -> 0;
+                  XOldReds -> XOldReds
+              end,
+    {reductions, Reds} = erlang:process_info(self(), reductions),
+    erlang:put(transfer_reductions_prev, Reds),
+    work_queue:submit_work(
+      Name,
+      fun () ->
+              erlang:bump_reductions(Reds - OldReds)
+      end).
