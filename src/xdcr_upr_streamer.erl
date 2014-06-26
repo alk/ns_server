@@ -144,6 +144,7 @@ find_high_seqno(Socket, Vb) ->
                end, undefined, <<>>).
 
 start(Socket, Vb, FailoverId, StartSeqno0, SnapshotStart0, SnapshotEnd0, Callback, Acc, Parent) ->
+    system_stats_collector:increment_counter(xdcr_upr_stream_starts, 1),
     EndSeqno = find_high_seqno(Socket, Vb),
 
     {StartSeqno, SnapshotStart, SnapshotEnd} =

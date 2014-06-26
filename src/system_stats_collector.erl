@@ -54,6 +54,8 @@ init([]) ->
     increment_counter(prev_request_leaves_rest, 0),
     increment_counter(prev_request_leaves_hibernate, 0),
     increment_counter(log_counter, 0),
+    increment_counter(prev_xdcr_upr_stream_starts, 0),
+    increment_counter(xdcr_upr_stream_starts, 0),
     _ = spawn_link(fun stale_histo_epoch_cleaner/0),
     Path = path_config:component_path(bin, "sigar_port"),
     Port =
@@ -402,12 +404,18 @@ add_ets_stats(Stats) ->
     [{_, NowHibernateEnters}] = ets:lookup(ns_server_system_stats, {request_enters, hibernate}),
     ets:insert(ns_server_system_stats, {prev_request_leaves_hibernate, NowHibernateLeaves}),
 
+    [{_, NowUprStarts}] = ets:lookup(ns_server_system_stats, xdcr_upr_stream_starts),
+    [{_, PrevUprStarts}] = ets:lookup(ns_server_system_stats, prev_xdcr_upr_stream_starts),
+    ets:insert(ns_server_system_stats, {prev_xdcr_upr_stream_starts, NowUprStarts}),
+
     RestRate = NowRestLeaves - PrevRestLeaves,
     WakeupRate = NowHibernateLeaves - PrevHibernateLeaves,
     HibernatedCounter = NowHibernateEnters - NowHibernateLeaves,
+    UprStartsRate = NowUprStarts - PrevUprStarts,
     lists:umerge(Stats, lists:sort([{rest_requests, RestRate},
                                     {hibernated_requests, HibernatedCounter},
-                                    {hibernated_waked, WakeupRate}])).
+                                    {hibernated_waked, WakeupRate},
+                                    {upr_starts, UprStartsRate}])).
 
 log_system_stats(TS) ->
     stats_collector:log_stats(TS, "@system", lists:sort(ets:tab2list(ns_server_system_stats))).

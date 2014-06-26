@@ -1518,7 +1518,10 @@ server_resources_stats_description() ->
                 {desc,<<"Number of streaming requests on port 8091 now idle">>}]},
        {struct,[{name,<<"hibernated_waked">>},
                 {title,<<"streaming wakeups/sec">>},
-                {desc,<<"Rate of streaming request wakeups on port 8091">>}]}]}].
+                {desc,<<"Rate of streaming request wakeups on port 8091">>}]},
+       {struct,[{name,<<"upr_starts">>},
+                {title,<<"upr wakeups/sec">>},
+                {desc,<<"asd">>}]}]}].
 
 serve_stats_directory(_PoolId, BucketId, Req) ->
     {ok, BucketConfig} = ns_bucket:get_bucket(BucketId),
