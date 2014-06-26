@@ -160,9 +160,17 @@ start(Socket, Vb, FailoverId, StartSeqno0, SnapshotStart0, SnapshotEnd0, Callbac
                 {StartSeqno0, SnapshotStart0, SnapshotEnd0}
         end,
 
-    do_start(Socket, Vb, FailoverId,
-             StartSeqno, EndSeqno, SnapshotStart, SnapshotEnd,
-             Callback, Acc, Parent, false).
+    case ns_config:read_key_fast(no_upr_simulation, false) of
+        true ->
+            Parent ! {failover_id, FailoverId, StartSeqno, EndSeqno, StartSeqno, EndSeqno},
+
+            proc_lib:init_ack({ok, self()}),
+            ok;
+        _ ->
+            do_start(Socket, Vb, FailoverId,
+                     StartSeqno, EndSeqno, SnapshotStart, SnapshotEnd,
+                     Callback, Acc, Parent, false)
+    end.
 
 do_start(Socket, Vb, FailoverId,
          StartSeqno, EndSeqno, SnapshotStart, SnapshotEnd,
@@ -242,7 +250,34 @@ stream_vbucket(Bucket, Vb, FailoverId,
                               StartSeqno, SnapshotStart, SnapshotEnd,
                               Callback, Acc, Parent]]),
 
-    enter_consumer_loop(Child, Callback, Acc).
+    case ns_config:read_key_fast(no_upr_simulation, false) of
+        false ->
+            enter_consumer_loop(Child, Callback, Acc);
+        _ ->
+            receive
+                {failover_id, _FailoverUUID, StartSeqno, EndSeqno, _SnapshotStart, _SnapshotEnd} = Evt ->
+                    {ok, Acc2} = Callback(Evt, Acc),
+                    fake_mutations_loop(StartSeqno+1, EndSeqno, Callback, SnapshotStart, SnapshotEnd, Acc2)
+            end
+    end.
+
+fake_mutations_loop(StartSeqno, EndSeqno, Callback, SnapshotStart, SnapshotEnd, Acc) ->
+    case StartSeqno > EndSeqno of
+        true ->
+            _ = Callback({stream_end, SnapshotStart, SnapshotEnd, EndSeqno}, Acc),
+            ok;
+        _ ->
+            {ok, Acc2} = Callback(#upr_mutation{id = <<"a">>,
+                                                local_seq = StartSeqno,
+                                                rev = {1, <<0:128>>},
+                                                body = <<>>,
+                                                datatype = 0,
+                                                deleted = false,
+                                                snapshot_start_seq = SnapshotStart,
+                                                snapshot_end_seq = SnapshotEnd},
+                                  Acc),
+            fake_mutations_loop(StartSeqno+1, EndSeqno, Callback, SnapshotStart, SnapshotEnd, Acc2)
+    end.
 
 stream_vbucket_inner(Bucket, Vb, FailoverId,
                      StartSeqno, SnapshotStart, SnapshotEnd,
