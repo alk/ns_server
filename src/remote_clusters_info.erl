@@ -89,7 +89,8 @@
          invalidate_remote_bucket/2, invalidate_remote_bucket_by_ref/1,
          find_cluster_by_uuid/1,
          get_memcached_vbucket_info_by_ref/3,
-         get_memcached_vbucket_info_by_ref/4]).
+         get_memcached_vbucket_info_by_ref/4,
+         verify_certificate_by_bucket_ref/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -199,6 +200,16 @@ get_remote_bucket_by_ref(Reference, Through, Timeout) ->
     gen_server:call(?MODULE,
                     {get_remote_bucket, Cluster,
                                         BucketName, Through, Timeout}, infinity).
+
+verify_certificate_by_bucket_ref(Reference, Cert) ->
+    {ok, {ClusterUUID, _}} = parse_remote_bucket_reference(Reference),
+    Cluster = find_cluster_by_uuid(ClusterUUID),
+    case lists:keyfind(cert, 1, Cluster) of
+        {_, ClusterCert} ->
+            Cert =:= ClusterCert;
+        false ->
+            Cert =:= undefined
+    end.
 
 invalidate_remote_bucket_by_ref(Reference) ->
     {ok, {ClusterUUID, BucketName}} = parse_remote_bucket_reference(Reference),
@@ -1689,12 +1700,14 @@ schedule_cluster_config_update(UUID, Tries) ->
 find_cluster_by_uuid(RemoteUUID) ->
     find_cluster_by_uuid(RemoteUUID, get_remote_clusters()).
 
-find_cluster_by_uuid(RemoteUUID, Clusters) ->
-    case partition_clusters_by_uuid(RemoteUUID, Clusters) of
-        {Cluster, _Rest} ->
-            Cluster;
-        Error ->
-            Error
+find_cluster_by_uuid(_RemoteUUID, []) ->
+    not_found;
+find_cluster_by_uuid(RemoteUUID, [First | Rest]) ->
+    case lists:keyfind(uuid, 1, First) of
+        {_, RemoteUUID} -> %% RemoteUUID is bound
+            First;
+        _ ->
+            find_cluster_by_uuid(Rest)
     end.
 
 partition_clusters_by_uuid(RemoteUUID, Clusters) ->

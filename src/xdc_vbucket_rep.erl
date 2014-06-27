@@ -778,7 +778,7 @@ update_rep_options(#rep_state{rep_details =
     end.
 
 start_replication(#rep_state{
-                     target_name = OrigTgtURI,
+                     target_name = TgtURI,
                      upr_failover_uuid = FailoverUUID,
                      current_through_seq = StartSeq,
                      current_through_snapshot_seq = SnapshotStart,
@@ -794,28 +794,24 @@ start_replication(#rep_state{
     NumWorkers = get_value(worker_processes, Options),
     BatchSizeItems = get_value(worker_batch_size, Options),
 
-    %% we re-fetch bucket details to get fresh remote cluster certificate
-    {TgtDB, TgtURI} =
-        case remote_clusters_info:get_remote_bucket_by_ref(TargetRef, false) of
-            {ok, CurrRemoteBucket} ->
-                TgtURI0 = hd(dict:fetch(Vb, CurrRemoteBucket#remote_bucket.capi_vbucket_map)),
-                CertPEM = CurrRemoteBucket#remote_bucket.cluster_cert,
-                case Remote of
-                    #xdc_rep_xmem_remote{options = XMemRemoteOptions} ->
-                        case get_value(cert, XMemRemoteOptions) =:= CertPEM of
-                            true -> ok;
-                            false ->
-                                erlang:exit({cert_mismatch_restart, Id, Vb})
-                        end;
-                    _ ->
-                        ok
-                end,
-                {xdc_rep_utils:parse_rep_db(TgtURI0, [], [{xdcr_cert, CertPEM} | Options]), TgtURI0};
-            Err ->
-                ?xdcr_error("Couldn't re-fetch remote bucket info for ~s (original url: ~s): ~p",
-                            [TargetRef, misc:sanitize_url(OrigTgtURI), Err]),
-                erlang:exit({get_remote_bucket_failed, Err})
-        end,
+    %% for xmem we simply verify if certificate stored in xmem options
+    %% is still same. If not (which is very rare case), we just crash
+    %% instead of bothering to update it
+    case Remote of
+        #xdc_rep_xmem_remote{options = XMemRemoteOptions} ->
+            CertOk = remote_clusters_info:verify_certificate_by_bucket_ref(
+                       TargetRef,
+                       get_value(cert, XMemRemoteOptions)),
+            case CertOk of
+                true -> ok;
+                _ ->
+                    erlang:exit({cert_mismatch_restart, Id, Vb})
+            end;
+        _ ->
+            ok
+    end,
+
+    TgtDB = xdc_rep_utils:parse_rep_db(TgtURI, [], Options),
     {ok, Target} = couch_api_wrap:db_open(TgtDB, []),
 
     SrcMasterDb = capi_utils:must_open_vbucket(SourceBucket, <<"master">>),
@@ -942,7 +938,6 @@ start_replication(#rep_state{
                                             changes_queue = ChangesQueue,
                                             workers = Workers,
                                             src_master_db = SrcMasterDb,
-                                            target_name = TgtURI,
                                             target = Target,
                                             status = NewVbStatus#rep_vb_status{num_changes_left = Changes,
                                                                                commit_time = TotalCommitTime},
