@@ -128,6 +128,18 @@ do_notify_vbucket_update(BucketName, VBucket, Body) ->
             ok
     end,
 
+    case FinalResponseStatus =:= ?SUCCESS of
+        true ->
+            case ns_config_ets_dup:unreliable_read_key(mccouch_anticipatory_delay, undefined) of
+                undefined ->
+                    ok;
+                Delay ->
+                    timer:sleep(Delay)
+            end;
+        _ ->
+            ok
+    end,
+
     FinalResponseStatus.
 
 -spec vbucket_state_to_atom(int_vb_state()) -> atom().
