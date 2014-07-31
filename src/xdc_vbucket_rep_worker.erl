@@ -54,7 +54,12 @@ queue_fetch_loop(WorkerID, Target, Cp, ChangesManager,
                                   {count, NumChecked}]),
             %% get docinfo of missing ids
             {MissingDocInfoList, MetaLatency, NumDocsOptRepd} =
-                find_missing(Changes, Target, OptRepThreshold, XMemLoc),
+                case ns_config:read_key_fast(xdcr_skip_backend, false) of
+                    false ->
+                        find_missing(Changes, Target, OptRepThreshold, XMemLoc);
+                    _ ->
+                        {[], 0, 0}
+                end,
             NumWritten = length(MissingDocInfoList),
             ?x_trace(foundMissing, [{count, NumWritten}]),
             Start = os:timestamp(),
@@ -79,6 +84,13 @@ queue_fetch_loop(WorkerID, Target, Cp, ChangesManager,
                     true ->
                         undefined
                 end,
+
+            case DocLatency of
+                undefined ->
+                    ok;
+                _ ->
+                    system_stats_collector:add_histo(xdcr_send_xmem_batch, DocLatency)
+            end,
 
             %% report seq done and stats to vb replicator
             ok = gen_server:call(Cp, {report_seq_done,

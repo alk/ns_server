@@ -62,6 +62,9 @@ do_flush_docs(#xdc_xmem_location{vb = VBucket,
     TimeStart = os:timestamp(),
 
     {ok, Statuses} = pooled_memcached_client:bulk_set_metas(McdDst, VBucket, MutationsList),
+
+    system_stats_collector:add_histo(xdcr_bulk_set_metas, timer:now_diff(os:timestamp(), TimeStart)),
+
     ?x_trace(xmemSetMetas, [{ids, {json, [M#dcp_mutation.id || M <- MutationsList]}},
                             {statuses, {json, Statuses}},
                             {startTS, xdcr_trace_log_formatter:format_ts(TimeStart)}]),

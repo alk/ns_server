@@ -91,9 +91,12 @@ bulk_set_metas_inner(S, Vb, MutationsList) ->
           erlang, apply,
           [fun bulk_set_metas_recv_replies/3, [S, self(), length(MutationsList)]]),
     Data = [encode_single_set_meta(Vb, M) || M <- MutationsList],
+    Start = os:timestamp(),
     send_batch(S, Data),
     receive
         {RecverPid, RV} ->
+            After = os:timestamp(),
+            system_stats_collector:add_histo({xdcr_actual_set_metas_exchange, length(MutationsList)}, timer:now_diff(After, Start)),
             {ok, RV}
     end.
 
@@ -145,18 +148,25 @@ execute(DestRef, Body, Args) ->
     end.
 
 execute_on_socket(DestRef, Body, Args) ->
+    TS = os:timestamp(),
     case DestRef:take_socket() of
         {ok, S} ->
-            execute_with_socket(S, Body, Args, DestRef);
+            After = os:timestamp(),
+            system_stats_collector:add_histo(xdrc_take_socket, timer:now_diff(After, TS)),
+            execute_with_socket(S, Body, Args, DestRef, After);
         {error, _} = Error ->
             Error
     end.
 
-execute_with_socket(S, Body, Args, DestRef) ->
+execute_with_socket(S, Body, Args, DestRef, After) ->
     RV = erlang:apply(Body, [S | Args]),
     case RV of
         _ when is_tuple(RV) andalso element(1, RV) =:= ok ->
+            After2 = os:timestamp(),
             DestRef:put_socket(S),
+            After3 = os:timestamp(),
+            system_stats_collector:add_histo(xdcr_network_work, timer:now_diff(After2, After)),
+            system_stats_collector:add_histo(xdcr_put_socket, timer:now_diff(After3, After2)),
             RV;
         Error ->
             %% no need to close socket, it'll be autoclosed
