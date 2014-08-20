@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html ng-app="app" ng-controller="idx">
+<head>
+<title></title>
+<script src="/angular/deps/angular.js"></script>
+<script src="/angular/deps/lodash.compat.js"></script>
+<script src="/angular/deps/lodash.mixin.js"></script>
+<script src="/angular/usage_bar_directive.js"></script>
+<script>
+angular.module("app", ["usageBarDirective", "ng"]).controller("idx", function ($scope) {
+  $scope.inUseExtra = 0;
+  $scope.moreExtra = function () {
+    $scope.inUseExtra += 1024*1024;
+  }
+});
+</script>
+<style>
+.usage_biggest {float:left;position:relative;width:775px;height:31px;background:url(../images/usages.png) no-repeat;}
+.usage_biggest div {background:url(../images/usages_new.png) 0 0 no-repeat;position:absolute;top:0px;left:0px;height:31px;}
+.usage_biggest i {position:absolute;top:-8px;right:0;display:block;width:1px;height:47px;background-color:#e43a1b;font-size:0;line-height:0;}
+.usage_biggest + table  {clear:both;width:599px;}
+.usage_biggest + table td {padding:13px 0 0 3px;}
+</style>
+</head>
+
+<body>
+<h1></h1>
+
+<dl class="line_cnt">
+  <div class="top-left">Total Allocated (204 MB)</div>
+  <div class="top-right">Total in Cluster (300 MB)</div>
+  <div class="usage_biggest usage">
+    <div style="width:100%;background-color:#E1E2E3"></div>
+    <div style="width:68%;background-color:#7EDB49"></div>
+    <div style="width:8%;background-color:#00BCE9"></div>
+    <i style="left:68%;background-color:#e43a1b"></i>
+  </div>
+  <table style="width:100%;"><tbody><tr>
+    <td style="text-align:left;color:#1878a2;">In Use (26 MB)</td>
+    <td style="text-align:center;color:#409f05;">Unused (178 MB)</td>
+    <td style="text-align:right;color:#444245;">Unallocated (95.3 MB)</td>
+  </tr></tbody></table>
+</dl>
+
+<dl mn-usage-bar data-usage-class="usage_biggest">
+  <!--  -->
+  <dt top-left>Total Allocatated</dt><dd>{{204*1024*1024}}</dd>
+  <dt top-right>Total In Cluster</dt><dd>{{300*1024*1024}}</dd>
+  <dt label-color="#1878a2" bar-color="#00BCE9">In Use</dt><dd>{{26*1024*1024 + inUseExtra}}</dd>
+  <dt label-color="#409f05" bar-color="#7EDB49">Unused</dt><dd>{{178*1024*1024}}</dd>
+  <dt label-color="#444245" bar-color="#E1E2E3">Unallocated</dt><dd>{{95.3*1024*1024}}</dd>
+  <!-- <dt label-color="#444245" bar-color="#E1E2E3">Unallocated</dt><dd>{{}}</dd> -->
+  <dt data-marker bar-color="#e43a1b"></dt><dd>{{40*1024*1024}}</dd>
+</dl>
+
+<button ng-click="moreExtra()">Btn!</button>
+
+<hr>
+<address></address>
+<!-- hhmts start -->Last modified: Wed Aug 20 19:49:56 PDT 2014 <!-- hhmts end -->
+</body> </html>
