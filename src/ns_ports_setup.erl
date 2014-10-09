@@ -289,8 +289,12 @@ memcached_config_path() ->
     filename:join(path_config:component_path(data, "config"), "memcached.json").
 
 memcached_config(Config) ->
-    {value, McdParams} = ns_config:search(Config, {node, node(), memcached}),
+    McdParamsLocal = ns_config:search(Config, {node, node(), memcached}, []),
+    McdParamsGlobal = ns_config:search(Config, memcached, []),
+    McdParams = McdParamsGlobal ++ McdParamsLocal,
+
     {value, McdConf} = ns_config:search(Config, {node, node(), memcached_config}),
+
 
     {Props} = expand_memcached_config(McdConf, McdParams),
     ExtraProps = ns_config:search(Config,
